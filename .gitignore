@@ -1,3 +1,4 @@
 node_modules/
 .pnpm-store/
 /mise.local.toml
+/.func-audit.sqlite*

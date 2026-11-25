@@ -39,4 +39,14 @@ Pass the directory containing the file and the sample ID:
 mise exec -- pnpm --silent audit:one --dataset-dir /path/to/dataset --idx 1
 ```
 
-The report includes `idx`, `model`, `prediction`, `reason`, and `evidence`. A prediction of `1` means the model identified a potential vulnerability. A `0` means it found none in the supplied function. Each evidence entry includes the original `source` excerpt and its inclusive `startLine` and `endLine`, counting from 1 within the function. To save the report, append `> report.json` to the command.
+The JSON result includes `id` for this audit, `idx` for the dataset sample, and `model` for the model used. A `prediction` of `1` means the model identified a potential vulnerability. A `0` means it found none in the supplied function. The `reason` explains the verdict. Each `evidence` entry includes the original `source` excerpt and its inclusive `startLine` and `endLine`, counting from 1 within the function. To save the JSON, append `> report.json` to the command.
+
+## Reopen a report
+
+Each audit gets its own record in `.func-audit.sqlite` in the project root. To reopen it, replace `1` below with the `id` from the JSON result. If the audit fails after creating the record, the error message includes the ID. An interactive terminal also shows the ID when the audit starts. Reading a report requires only the local database.
+
+```sh
+mise exec -- pnpm --silent report:show --id 1
+```
+
+The saved JSON record includes the start time, source, model, and status. A `completed` report includes the verdict and evidence. A `failed` report contains the error and a `null` prediction. If the process exits before it can record the outcome, the status remains `started`.

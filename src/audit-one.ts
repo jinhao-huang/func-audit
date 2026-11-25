@@ -1,6 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
+import { configuredModelId } from "./project-api.ts";
+import { completeReport, failReport, startReport } from "./reports.ts";
 import { reviewFunction } from "./review.ts";
 
 const usage = "Usage: pnpm audit:one --dataset-dir <directory> --idx <sample-id>";
@@ -34,8 +36,23 @@ export async function auditOne(args: string[]) {
     if (typeof sample.func !== "string" || !sample.func.trim()) {
       throw new Error(`Sample ${idx} has no function text.`);
     }
-    const report = await reviewFunction(sample.func);
-    console.log(JSON.stringify({ idx, ...report }, null, 2));
+    const id = startReport(idx, sample.func, configuredModelId());
+    if (process.stderr.isTTY) console.error(`Started report ${id}`);
+    let report;
+    try {
+      report = await reviewFunction(sample.func);
+      completeReport(id, report);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const diagnostic = `Report ${id} failed: ${message}`;
+      try {
+        failReport(id, message);
+      } catch (saveError) {
+        throw new Error(`${diagnostic} (could not save failure: ${String(saveError)})`, { cause: error });
+      }
+      throw new Error(diagnostic, { cause: error });
+    }
+    console.log(JSON.stringify({ id, idx, ...report }, null, 2));
     return;
   }
   throw new Error(`Sample ${idx} was not found in test.jsonl.`);

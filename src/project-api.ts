@@ -1,11 +1,15 @@
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
+export function configuredModelId() {
+  return process.env.FUNC_AUDIT_MODEL?.trim() || "deepseek-flash";
+}
+
 export async function projectApi() {
   const apiKey = process.env.FUNC_AUDIT_API_KEY?.trim();
   if (!apiKey) throw new Error("Set FUNC_AUDIT_API_KEY to the project API key.");
   const baseUrl = process.env.FUNC_AUDIT_BASE_URL?.trim() || "https://api.deepseek.com";
-  const modelId = process.env.FUNC_AUDIT_MODEL?.trim() || "deepseek-flash";
+  const modelId = configuredModelId();
 
   const credentials = new InMemoryCredentialStore();
   const modelRuntime = await ModelRuntime.create({ credentials, modelsPath: null, refreshOnCreate: false });

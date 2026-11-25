@@ -39,4 +39,14 @@ CLI 从 `test.jsonl` 读取数据，每行一个 JSON 对象。`idx` 是非负�
 mise exec -- pnpm --silent audit:one --dataset-dir /path/to/dataset --idx 1
 ```
 
-报告中的 `idx` 和 `model` 分别记录样本编号和所用模型。`prediction` 为 `1` 表示模型发现了潜在漏洞，为 `0` 表示模型在这个函数中未发现漏洞。`reason` 给出判断理由。`evidence` 中的每条记录都包含源码片段 `source` 及其起止行号 `startLine` 和 `endLine`。行号从函数的第 1 行算起，包含首尾两行。要保存报告，在命令末尾加上 `> report.json`。
+输出的 JSON 中，`id` 是本次审计的报告编号，`idx` 是数据集中的样本编号，`model` 是所用模型。`prediction` 为 `1` 表示模型发现了潜在漏洞，为 `0` 表示模型在这个函数中未发现漏洞。`reason` 给出判断理由。`evidence` 中的每条记录都包含源码片段 `source` 及其起止行号 `startLine` 和 `endLine`。行号从函数的第 1 行算起，包含首尾两行。要保存 JSON，在命令末尾加上 `> report.json`。
+
+## 按 ID 查看报告
+
+每次审计都会在项目根目录的 `.func-audit.sqlite` 中生成一条独立记录。把下面命令里的 `1` 换成 JSON 结果中的 `id`，即可从本地数据库读取报告。如果创建记录后审计失败，可以从错误信息里找到 ID。在交互终端运行时，审计一开始就能看到这个 ID。
+
+```sh
+mise exec -- pnpm --silent report:show --id 1
+```
+
+保存的 JSON 记录包含开始时间、函数源码、模型和状态。`completed` 表示审计完成，可以查看判断结果和引用的证据。`failed` 表示审计失败，记录中会给出错误原因，预测值为 `null`。如果进程在写入结果前退出，状态会停留在 `started`。

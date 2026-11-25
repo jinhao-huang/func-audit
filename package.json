@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "audit:one": "node src/audit-one.ts",
+    "report:show": "node src/report-show.ts",
     "check": "tsc --noEmit",
     "test": "node --test"
   },

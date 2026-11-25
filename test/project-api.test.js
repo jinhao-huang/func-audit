@@ -29,7 +29,12 @@ test("audits use the project key, endpoint and model", async (t) => {
   });
 
   const dir = await mkdtemp(join(tmpdir(), "func-audit-test-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const cwd = process.cwd();
+  process.chdir(dir);
+  t.after(async () => {
+    process.chdir(cwd);
+    await rm(dir, { recursive: true, force: true });
+  });
   await writeFile(join(dir, "test.jsonl"), JSON.stringify({ idx: 1, func: "int one(void) { return 1; }" }));
   function runAudit() {
     process.env.OPENAI_CUSTOM_HEADERS = "Authorization: Bearer personal-key\nX-Personal: personal-value";
