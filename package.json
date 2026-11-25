@@ -1,0 +1,16 @@
+{
+  "name": "func-audit",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "audit:one": "node src/audit-one.ts",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "typescript": "^6.0.0"
+  }
+}
