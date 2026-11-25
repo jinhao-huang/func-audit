@@ -5,8 +5,14 @@ import { reviewFunction } from "./review.ts";
 
 const usage = "Usage: pnpm audit:one --dataset-dir <directory> --idx <sample-id>";
 
-async function main() {
+export async function auditOne(args: string[]) {
+  // The OpenAI client merges OPENAI_* settings into requests, even with an explicit key.
+  // Clear them in this CLI process before creating the project session.
+  for (const name of Object.keys(process.env)) {
+    if (name.startsWith("OPENAI_")) delete process.env[name];
+  }
   const { values } = parseArgs({
+    args,
     options: {
       "dataset-dir": { type: "string" },
       idx: { type: "string" },
@@ -35,9 +41,11 @@ async function main() {
   throw new Error(`Sample ${idx} was not found in test.jsonl.`);
 }
 
-try {
-  await main();
-} catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
+if (import.meta.main) {
+  try {
+    await auditOne(process.argv.slice(2));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
 }

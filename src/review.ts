@@ -3,7 +3,9 @@ import {
   createExtensionRuntime,
   type ResourceLoader,
   SessionManager,
+  SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { projectApi } from "./project-api.ts";
 
 const auditInstructions = `Review the numbered C or C++ function for a code maintainer.
 Use only the supplied function. Return a single JSON object with these fields:
@@ -53,16 +55,19 @@ function parseReview(reply: string, lines: string[]) {
 }
 
 export async function reviewFunction(source: string) {
+  const { modelRuntime, model } = await projectApi();
   const lines = source.split(/\r?\n/);
   const numbered = lines.map((line, i) => `${i + 1} | ${line}`).join("\n");
   const { session } = await createAgentSession({
     cwd: "/",
+    model,
+    modelRuntime,
+    settingsManager: SettingsManager.inMemory(),
     resourceLoader: resources,
     sessionManager: SessionManager.inMemory("/"),
     tools: [],
   });
   try {
-    if (!session.model) throw new Error("Configure a model provider in Pi before running an audit.");
     await session.prompt(numbered);
     const message = session.messages.findLast((entry) => entry.role === "assistant");
     if (message?.stopReason !== "stop") {

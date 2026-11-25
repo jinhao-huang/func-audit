@@ -1,3 +1,15 @@
 [tools]
 node = "24.18.1"
 pnpm = "11.20.0"
+
+[tasks.setup]
+description = "Create local API settings and install locked dependencies"
+run = '''
+if [ ! -f mise.local.toml ]; then
+  (umask 077 && cp mise.local.toml.example mise.local.toml)
+  echo "Created mise.local.toml. Set FUNC_AUDIT_API_KEY there or in your shell."
+else
+  echo "Keeping existing mise.local.toml."
+fi
+pnpm install --frozen-lockfile
+'''

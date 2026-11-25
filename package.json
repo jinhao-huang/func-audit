@@ -4,9 +4,11 @@
   "type": "module",
   "scripts": {
     "audit:one": "node src/audit-one.ts",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "node --test"
   },
   "dependencies": {
+    "@earendil-works/pi-ai": "1.5.0",
     "@earendil-works/pi-coding-agent": "1.5.0"
   },
   "devDependencies": {
