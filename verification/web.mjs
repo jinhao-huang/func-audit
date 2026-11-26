@@ -8,6 +8,23 @@ import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import test from "node:test";
 
+test("the development document loads its routes without modulepreload", async t => {
+  const cwd = await mkdtemp(join(tmpdir(), "func-audit-dev-document-"));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  const html = execFileSync(process.execPath, ["--conditions=development", "--input-type=module", "-e", `
+    import { createRequestHandler } from "react-router";
+    import * as build from "./build/server/index.js";
+    process.chdir(process.argv[1]);
+    const assets = { ...build.assets, hmr: { runtime: "/@vite/client" } };
+    const handle = createRequestHandler({ ...build, assets }, "development");
+    const response = await handle(new Request("http://localhost/"));
+    process.stdout.write(await response.text());
+  `, cwd], { encoding: "utf8" });
+  assert.match(html, /New audit/);
+  assert.match(html, /import "\/@vite\/client"/);
+  assert.doesNotMatch(html, /rel="modulepreload"/);
+});
+
 test("submit a pair, replay tool events, download both predictions and inspect a partial retry", { timeout: 30000 }, async t => {
   const cwd = await mkdtemp(join(tmpdir(), "func-audit-web-"));
   t.after(() => rm(cwd, { recursive: true, force: true }));
@@ -59,6 +76,7 @@ test("submit a pair, replay tool events, download both predictions and inspect a
   const submit = (body) => fetch(base + "/runs", { method: "POST", redirect: "manual",
     headers: { origin: base }, body: new URLSearchParams(body) });
   const interrupted = await (await fetch(base + "/reports/1")).text();
+  assert.match(interrupted, /rel="modulepreload"/);
   assert.match(interrupted, /audit process stopped before saving a result/);
   assert.equal((await submit({ pair: "-1" })).status, 400);
   const missingPair = await submit({ pair: "2" });

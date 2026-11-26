@@ -1,0 +1,13 @@
+diff --git a/dist/development/lib/dom/ssr/components.js b/dist/development/lib/dom/ssr/components.js
+index f928274b51c1002e9fcfeb0b0f7d5faa6ec9b42a..da28b5a4d6a113c16bef532812f8bd1416be469a 100644
+--- a/dist/development/lib/dom/ssr/components.js
++++ b/dist/development/lib/dom/ssr/components.js
+@@ -542,6 +542,8 @@ import(${JSON.stringify(manifest.entry.module)});`;
+ 			async: true
+ 		}));
+ 	}, []);
++	// WebKit can reuse preloaded route modules after Vite changes their dependency URLs.
++	if (manifest.hmr && !isHydrated) return initialScripts;
+ 	let preloads = isHydrated || isRSCRouterContext ? [] : [...new Set(manifest.entry.imports.concat(getModuleLinkHrefs(matches, manifest, { includeHydrateFallback: true })))];
+ 	let sri = typeof manifest.sri === "object" ? manifest.sri : {};
+ 	warnOnce(!isRSCRouterContext, "The <Scripts /> element is a no-op when using RSC and can be safely removed.");
