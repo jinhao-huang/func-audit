@@ -1,6 +1,7 @@
-import { readFileSync, statSync } from "node:fs";
+import { open } from "node:fs/promises";
 import { basename } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { indexDescriptions, nearestDescriptions } from "./embeddings.ts";
 
 export type CaseHit = {
   line: number;
@@ -12,63 +13,73 @@ export type CaseHit = {
 };
 export type CaseSearch = { query: string; hits: CaseHit[] };
 
-function refreshIndex(db: DatabaseSync, file: string, stamp: string) {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    db.exec("CREATE TABLE IF NOT EXISTS corpus (stamp TEXT NOT NULL)");
-    if (!db.prepare("SELECT 1 FROM corpus WHERE stamp = ?").get(stamp)) {
-      db.exec(`
-        DROP TABLE IF EXISTS cases;
-        CREATE VIRTUAL TABLE cases USING fts5(
-          func, description, message, cwe, cve, tokenize = "unicode61 tokenchars '_'"
-        );
-      `);
-      const insert = db.prepare("INSERT INTO cases(rowid, func, description, message, cwe, cve) VALUES (?, ?, ?, ?, ?, ?)");
-      for (const [index, line] of readFileSync(file, "utf8").split("\n").entries()) {
-        if (!line.trim()) continue;
-        try {
-          const row = JSON.parse(line);
-          if (typeof row.func !== "string" || !row.func.trim()) throw new Error("Expected function text.");
-          if (typeof row.cve !== "string" || !row.cve.trim()) throw new Error("Expected a CVE identifier.");
-          insert.run(index + 1, row.func, row.cve_desc ?? "", row.commit_message ?? "",
-            (row.cwe ?? []).join(" "), row.cve.trim());
-        } catch (cause) {
-          throw new Error(`${basename(file)} line ${index + 1}: ${cause instanceof Error ? cause.message : cause}`, { cause });
-        }
-      }
-      db.exec("DELETE FROM corpus");
-      db.prepare("INSERT INTO corpus VALUES (?)").run(stamp);
+export async function buildCaseIndex(file: string, destination: string) {
+  using db = new DatabaseSync(destination);
+  db.exec(`
+    BEGIN;
+    CREATE VIRTUAL TABLE cases USING fts5(func, description, message, cwe, cve, tokenize = "unicode61 tokenchars '_'");
+    CREATE TABLE vectors (line INTEGER PRIMARY KEY, embedding BLOB NOT NULL);
+  `);
+  const insert = db.prepare("INSERT INTO cases(rowid, func, description, message, cwe, cve) VALUES (?, ?, ?, ?, ?, ?)");
+  await using source = await open(file);
+  let line = 0;
+  for await (const text of source.readLines()) {
+    line++;
+    if (!text.trim()) continue;
+    try {
+      const row = JSON.parse(text);
+      if (typeof row.func !== "string" || !row.func.trim()) throw new Error("Expected function text.");
+      if (typeof row.cve !== "string" || !row.cve.trim()) throw new Error("Expected a CVE identifier.");
+      insert.run(line, row.func, row.cve_desc ?? "", row.commit_message ?? "", (row.cwe ?? []).join(" "), row.cve.trim());
+    } catch (cause) {
+      throw new Error(`${basename(file)} line ${line}: ${cause instanceof Error ? cause.message : cause}`, { cause });
     }
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
   }
+  const count = await indexDescriptions(db);
+  db.exec("COMMIT");
+  return count;
 }
 
-export function searchCases(file: string, query: string): CaseSearch {
-  const info = statSync(file, { bigint: true });
-  using db = new DatabaseSync(`${file}.sqlite`, { timeout: 30000 });
-  refreshIndex(db, file, `${info.size}:${info.mtimeNs}`);
+const candidateCount = 20;
+
+// Reciprocal rank fusion uses one-based ranks with k = 60.
+function rankWeight(zeroBasedRank: number) {
+  return 1 / (60 + zeroBasedRank + 1);
+}
+
+const fields = `rowid AS line, cve, cwe, substr(description, 1, 900) AS description`;
+
+export async function searchCases(file: string, query: string): Promise<CaseSearch> {
+  const terms = [...new Set(query.toLowerCase().match(/[a-z0-9_]+(?:-[a-z0-9_]+)*/g) ?? [])].slice(0, 16);
+  if (!terms.length) return { query, hits: [] };
+  using db = new DatabaseSync(file, { readOnly: true });
   const ranked = db.prepare(`
-    SELECT rowid, cve, cwe, substr(description, 1, 900) AS description,
+    SELECT ${fields},
            CASE WHEN length(message) <= 800 THEN message
                 ELSE substr(snippet(cases, 2, '', '', ' … ', 32), 1, 800) END AS commitMessage,
            substr(snippet(cases, 0, '', '', ' … ', 32), 1, 800) AS excerpt
     FROM cases WHERE cases MATCH ? ORDER BY rank, rowid
   `);
-  const terms = [...new Set(query.toLowerCase().match(/[a-z0-9_]+(?:-[a-z0-9_]+)*/g) ?? [])].slice(0, 16);
-  const hits: CaseHit[] = [];
-  if (terms.length) {
-    const cves = new Set<string>();
-    for (const row of ranked.iterate(terms.map((term) => `"${term}"`).join(" OR "))) {
-      const cve = String(row.cve);
-      if (cves.has(cve)) continue;
-      cves.add(cve);
-      hits.push({ line: Number(row.rowid), cve, cwe: String(row.cwe),
-        description: String(row.description), commitMessage: String(row.commitMessage), excerpt: String(row.excerpt) });
-      if (hits.length === 3) break;
+  const candidates = new Map<string, { hit: CaseHit; score: number }>();
+  for (const row of ranked.iterate(terms.map(term => `"${term}"`).join(" OR "))) {
+    const hit = row as CaseHit;
+    if (candidates.has(hit.cve)) continue;
+    candidates.set(hit.cve, { hit, score: rankWeight(candidates.size) });
+    if (candidates.size === candidateCount) break;
+  }
+
+  const nearest = await nearestDescriptions(db, query, candidateCount);
+  if (nearest.length) {
+    const get = db.prepare(`SELECT ${fields}, substr(message, 1, 800) AS commitMessage,
+      substr(func, 1, 800) AS excerpt FROM cases WHERE rowid = ?`);
+    for (const [index, line] of nearest.entries()) {
+      const hit = get.get(line) as CaseHit;
+      const score = rankWeight(index);
+      const lexical = candidates.get(hit.cve);
+      if (lexical) lexical.score += score;
+      else candidates.set(hit.cve, { hit, score });
     }
   }
+  const hits = [...candidates.values()].sort((a, b) => b.score - a.score).slice(0, 3).map(row => row.hit);
   return { query, hits };
 }

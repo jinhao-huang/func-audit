@@ -72,7 +72,7 @@ export async function reviewFunction(source: string, snapshot?: {
   root: string;
   location: Pick<SnapshotMetadata, "path" | "startLine" | "endLine">;
   onLookup: (lookup: Lookup, callId: string) => void;
-}, searchCases?: (query: string, callId: string) => CaseSearch,
+}, searchCases?: (query: string, callId: string) => Promise<CaseSearch>,
   onStart?: (callId: string, name: string, args: object) => void) {
   const { modelRuntime, model } = await projectApi();
   const lines = source.split(/\r?\n/);
@@ -103,7 +103,7 @@ export async function reviewFunction(source: string, snapshot?: {
       execute: async (id, { query }) => {
         try {
           startTool(id, "search_cases", { query });
-          const result = searchCases(query, id);
+          const result = await searchCases(query, id);
           return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: undefined };
         } catch (cause) {
           abortReview("Historical case lookup failed", cause);

@@ -1,5 +1,7 @@
 allowBuilds:
   '@google/genai': false
+  onnxruntime-node: false
   protobufjs: false
+  sharp: false
 patchedDependencies:
   react-router@8.5.3: patches/react-router@8.5.3.patch

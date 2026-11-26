@@ -1,9 +1,10 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { Worker } from "node:worker_threads";
+import { type MessagePort, Worker } from "node:worker_threads";
+import { searchCases } from "./cases.ts";
 import { openDatabase } from "./database.ts";
 import { failReport } from "./reports.ts";
 import { configuredEndpoint } from "./project-api.ts";
-import type { Sample } from "./samples.ts";
+import { caseIndexPath, type Sample } from "./samples.ts";
 
 type Job = { id: number; idx: number; source: string; target: number | null; commitUrl: string | null; model: string; endpoint: string };
 
@@ -14,6 +15,16 @@ async function execute(job: Job) {
     await new Promise<void>((resolve, reject) => {
       const worker = new Worker(new URL("./audit-worker.ts", import.meta.url), {
         workerData: { id: job.id, sample }, env: { ...process.env, FUNC_AUDIT_MODEL: job.model }, execArgv: [],
+      });
+      // Keep the native inference session on one thread, shared by all audit workers.
+      worker.on("message", async ({ query, reply }: { query: string; reply: MessagePort }) => {
+        try {
+          reply.postMessage(await searchCases(caseIndexPath, query));
+        } catch (cause) {
+          reply.postMessage({ error: cause instanceof Error ? cause.message : String(cause) });
+        } finally {
+          reply.close();
+        }
       });
       worker.on("error", reject);
       worker.on("exit", code => code === 0 ? resolve() : reject(new Error(`Worker exited with status ${code}.`)));

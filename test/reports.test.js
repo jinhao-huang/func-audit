@@ -31,7 +31,7 @@ test("prepare excludes test commits regardless of knowledge file order", async t
   await writeFile(join(cwd, "data/raw/test.jsonl"), jsonl(samples));
   const raw = join(cwd, "data/raw/knowledge.jsonl");
   const prepared = join(cwd, "data/prepared/knowledge.eval.jsonl");
-  const keep = { commit_url: "other", cve: "shared" };
+  const keep = { commit_url: "other", cve: "shared", func: "int kept();" };
   const overlap = { commit_url: "repair", cve: "shared" };
   const prepare = () => exec(process.execPath, [cli, "prepare"], { cwd });
   for (const rows of [[keep, overlap, overlap], [overlap, overlap, keep]]) {
@@ -42,9 +42,17 @@ test("prepare excludes test commits regardless of knowledge file order", async t
   await writeFile(raw, jsonl([overlap]) + "{");
   await assert.rejects(prepare(), /knowledge.jsonl line 2: invalid JSON/);
   assert.equal(await readFile(prepared, "utf8"), jsonl([keep]));
+  await writeFile(raw, jsonl([{ ...keep, func: "" }]));
+  await assert.rejects(prepare(), /Expected function text/);
+  const index = join(cwd, "data/prepared/cases.sqlite");
+  {
+    using db = new DatabaseSync(index, { readOnly: true });
+    assert.equal(db.prepare("SELECT func FROM cases").get().func, keep.func);
+  }
   await rm(raw);
   assert.match((await prepare()).stdout, /case retrieval disabled/);
   await assert.rejects(readFile(prepared), { code: "ENOENT" });
+  await assert.rejects(readFile(index), { code: "ENOENT" });
 });
 
 test("prepare, audit, reopen and grade independent attempts at the same pair", { timeout: 30000 }, async t => {

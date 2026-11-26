@@ -86,7 +86,7 @@ test("Pi uses the selected snapshot and saved evidence survives its removal", as
   });
   let withCases = true;
   await mkdir("data/prepared", { recursive: true });
-  await writeFile("data/prepared/knowledge.eval.jsonl", JSON.stringify({ func: "void copy_value(int);", cve: "CVE-2020-1234", cve_desc: "A helper example." }));
+  await writeFile("data/prepared/cases.sqlite", "This index must stay unopened until Pi searches.");
   let requests = [];
   let rounds = 0;
   let grepResult;
@@ -129,7 +129,6 @@ test("Pi uses the selected snapshot and saved evidence survives its removal", as
   const saved = readReport(output.id);
   assert.deepEqual(saved.context, output.context);
   assert.deepEqual(saved.context.caseSearches, []);
-  assert.equal(existsSync("data/prepared/knowledge.eval.jsonl.sqlite"), false);
   assert.deepEqual(saved.context.snapshot, {
     repository: "example/demo", revision: parent, path: "src/main.c", startLine: 2, endLine: 4,
   });
@@ -137,7 +136,7 @@ test("Pi uses the selected snapshot and saved evidence survives its removal", as
   assert.deepEqual(saved.evidence, [{ path: "src/helper.c", startLine: 2, endLine: 2, source: "  return x;" }]);
 
   withCases = false;
-  await rm("data/prepared/knowledge.eval.jsonl");
+  await rm("data/prepared/cases.sqlite");
   sample.target = 0;
   requests = [];
   rounds = 0;

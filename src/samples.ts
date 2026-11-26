@@ -3,13 +3,15 @@ import { mkdir, mkdtemp, open, readFile, rename, rm, writeFile } from "node:fs/p
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
+import { buildCaseIndex } from "./cases.ts";
 import { selectPairs } from "./selection.ts";
 
 const datasetPath = "data/raw/test.jsonl";
 const rawKnowledge = "data/raw/knowledge.jsonl";
 const prepared = "data/prepared";
 const pairsPath = join(prepared, "pairs.jsonl");
-export const knowledgePath = join(prepared, "knowledge.eval.jsonl");
+export const caseIndexPath = join(prepared, "cases.sqlite");
+const knowledgePath = join(prepared, "knowledge.eval.jsonl");
 
 export type Sample = { idx: number; func: string; commit_url?: string; target?: number };
 
@@ -92,9 +94,13 @@ export async function prepareData() {
       }
       const caseFile = join(temporary, "knowledge.eval.jsonl");
       await writeFile(caseFile, evaluationRows());
+      const index = join(temporary, "cases.sqlite");
+      const vectors = await buildCaseIndex(caseFile, index);
       await rename(caseFile, knowledgePath);
-      knowledgeSummary = `Historical cases: ${kept} kept, ${excluded} excluded for overlap.`;
+      await rename(index, caseIndexPath);
+      knowledgeSummary = `Historical cases: ${kept} kept, ${excluded} excluded for overlap; ${vectors} CVE descriptions indexed.`;
     } else {
+      await rm(caseIndexPath, { force: true });
       await rm(knowledgePath, { force: true });
     }
     await rename(pairFile, pairsPath);
