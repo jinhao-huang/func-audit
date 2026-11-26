@@ -1,13 +1,14 @@
 import { execFile } from "node:child_process";
-import { createWriteStream, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { Writable } from "node:stream";
+import { createInterface } from "node:readline";
+import { DatabaseSync } from "node:sqlite";
+import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 
 const exec = promisify(execFile);
-const sha = /^[0-9a-f]{40}$/;
 
 export async function snapshotPath(root: string, input: string) {
   if (!input || isAbsolute(input) || input.split(sep).includes("..")) {
@@ -27,17 +28,80 @@ export type SnapshotProgress =
 function commitLocation(link: string) {
   const github = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/commit\/([0-9a-f]{40})\/?$/.exec(link);
   if (github && !github[1].split("/").some((part) => part === "." || part === "..")) {
-    return { repository: github[1], commit: github[2] };
+    return { repository: github[1].toLowerCase(), commit: github[2] };
   }
   const qemu = /^https:\/\/git\.qemu\.org\/\?p=qemu\.git;a=commit;h=([0-9a-f]{40})$/.exec(link);
   if (qemu) return { repository: "qemu/qemu", commit: qemu[1] };
   throw new Error("Expected a supported repair commit URL with a full commit ID.");
 }
 
-async function download(url: string, signal?: AbortSignal) {
-  const response = await fetch(url, { signal });
-  if (!response.ok) throw new Error(`Snapshot request failed: HTTP ${response.status} at ${url}`);
-  return response;
+function git(directory: string, signal: AbortSignal | undefined, ...args: string[]) {
+  signal?.throwIfAborted();
+  return exec("git", [`--git-dir=${directory}`, ...args], {
+    signal,
+    env: { ...process.env, LC_ALL: "C", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1",
+      GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "/usr/bin/false" },
+  });
+}
+
+async function cacheRepair(repository: string, commit: string,
+  onProgress?: (event: SnapshotProgress) => void, signal?: AbortSignal) {
+  const xdg = process.env.XDG_CACHE_HOME;
+  const base = xdg && isAbsolute(xdg) ? xdg : join(homedir(), ".cache");
+  const directory = join(base, "func-audit/repos/github.com", `${repository}.git`);
+  const ref = `refs/func-audit/repairs/${commit}`;
+  async function cached() {
+    if (!existsSync(join(directory, "HEAD"))) return false;
+    try {
+      await git(directory, signal, "show-ref", "--verify", "--quiet", ref);
+      return true;
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === 1) return false;
+      throw error;
+    }
+  }
+  if (await cached()) return directory;
+  await mkdir(directory, { recursive: true });
+  // One writer per repository, including workers from other worktrees. Closing the
+  // connection releases the transaction on success, failure, or process exit.
+  using lock = new DatabaseSync(join(directory, "fetch-lock.sqlite"));
+  while (true) {
+    try {
+      lock.exec("BEGIN IMMEDIATE");
+      break;
+    } catch (error) {
+      if (!(error instanceof Error && "errcode" in error && error.errcode === 5)) throw error;
+      await delay(100, undefined, { signal });
+    }
+  }
+  if (!await cached()) {
+    if (!existsSync(join(directory, "HEAD"))) await git(directory, signal, "init", "--bare");
+    onProgress?.({ kind: "download", bytes: 0 });
+    const fetch = git(directory, signal, "-c", "fetch.unpackLimit=1", "fetch", "--progress", "--no-tags",
+      "--depth=2", `https://github.com/${repository}.git`, `${commit}:${ref}`);
+    const lines = createInterface({ input: fetch.child.stderr! });
+    const units = { bytes: 1, KiB: 1024, MiB: 1024 ** 2, GiB: 1024 ** 3 };
+    let reported = 0;
+    async function reportBytes() {
+      for await (const line of lines) {
+        const match = /^Receiving objects:.*?, ([\d.]+) (bytes|KiB|MiB|GiB) \|/.exec(line);
+        if (!match) continue;
+        const bytes = Math.round(Number(match[1]) * units[match[2] as keyof typeof units]);
+        if (bytes > reported) onProgress?.({ kind: "download", bytes });
+        reported = bytes;
+      }
+    }
+    try {
+      await Promise.all([fetch, reportBytes()]);
+    } catch (error) {
+      fetch.child.kill();
+      await fetch.catch(() => {});
+      throw error;
+    } finally {
+      lines.close();
+    }
+  }
+  return directory;
 }
 
 async function checkArchiveCase(archive: string, signal?: AbortSignal) {
@@ -57,14 +121,13 @@ export async function prepareSnapshot(link: string, target: number, source: stri
   onProgress?: (event: SnapshotProgress) => void, signal?: AbortSignal) {
   const { repository, commit } = commitLocation(link);
   if (target !== 0 && target !== 1) throw new Error("Snapshot preparation requires a binary target.");
+  const directory = await cacheRepair(repository, commit, onProgress, signal);
   let revision = commit;
   if (target === 1) {
-    const response = await download(`https://api.github.com/repos/${repository}/git/commits/${commit}`, signal);
-    const { parents } = await response.json();
-    if (!Array.isArray(parents) || parents.length !== 1 || !sha.test(parents[0]?.sha)) {
-      throw new Error("The repair commit must have one identifiable parent.");
-    }
-    revision = parents[0].sha;
+    const { stdout } = await git(directory, signal, "cat-file", "-p", commit);
+    const parents = [...stdout.split("\n\n", 1)[0].matchAll(/^parent ([0-9a-f]{40})$/gm)];
+    if (parents.length !== 1) throw new Error("The repair commit must have one identifiable parent.");
+    revision = parents[0][1];
   }
   const temp = await mkdtemp(join(tmpdir(), "func-audit-snapshot-"));
   const dispose = () => rm(temp, { recursive: true, force: true });
@@ -72,32 +135,12 @@ export async function prepareSnapshot(link: string, target: number, source: stri
     const root = join(await realpath(temp), "source");
     await mkdir(root);
     const archive = join(temp, "snapshot.tar.gz");
-    onProgress?.({ kind: "download", bytes: 0 });
-    const response = await download(`https://codeload.github.com/${repository}/tar.gz/${revision}`, signal);
-    if (!response.body) throw new Error("The source archive is empty.");
-    const size = Number(response.headers.get("content-length"));
-    const total = Number.isSafeInteger(size) && size > 0 && !response.headers.has("content-encoding") ? size : undefined;
-    if (total) onProgress?.({ kind: "download", bytes: 0, total });
-    const file = createWriteStream(archive);
-    let reported = 0;
-    const publish = () => {
-      if (file.bytesWritten === reported) return;
-      reported = file.bytesWritten;
-      onProgress?.({ kind: "download", bytes: reported, total });
-    };
-    const timer = setInterval(() => {
-      try { publish(); } catch (error) { file.destroy(error as Error); }
-    }, 1000);
-    try {
-      await response.body.pipeTo(Writable.toWeb(file), { signal });
-    } finally {
-      clearInterval(timer);
-      publish();
-    }
     onProgress?.({ kind: "extract" });
+    await git(directory, signal, "archive", "--format=tar.gz", "-o", archive, revision);
     // A Git tree can contain both xt_DSCP.h and xt_dscp.h.
     if (existsSync(join(temp, "SOURCE"))) await checkArchiveCase(archive, signal);
-    await exec("tar", ["-xzf", archive, "--strip-components=1", "-C", root], { signal });
+    await exec("tar", ["-xzf", archive, "-C", root], { signal });
+    await rm(archive);
     onProgress?.({ kind: "locate" });
     const location = await locateFunction(root, source, signal);
     return { root, metadata: { repository, revision, ...location }, dispose };
