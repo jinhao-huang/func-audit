@@ -1,8 +1,10 @@
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
+import { searchCases } from "./cases.ts";
 import { configuredModelId } from "./project-api.ts";
-import { completeReport, failReport, saveContext, startReport, type SourceContext } from "./reports.ts";
+import { completeReport, failReport, saveContext, startReport, type AuditContext, type CaseSearchRecord } from "./reports.ts";
 import { prepareSnapshot } from "./snapshot.ts";
 import { reviewFunction } from "./review.ts";
 
@@ -41,24 +43,39 @@ export async function auditOne(args: string[]) {
     if (process.stderr.isTTY) console.error(`Started report ${id}`);
     let report;
     let snapshot: Awaited<ReturnType<typeof prepareSnapshot>> | undefined;
-    let context: SourceContext | undefined;
+    const context: AuditContext = {};
     try {
+      const knowledge = join(dir, "knowledge.eval.jsonl");
+      const searches: CaseSearchRecord[] | undefined = existsSync(knowledge) ? [] : undefined;
+      if (searches) {
+        context.caseSearches = searches;
+        saveContext(id, context);
+      }
       if (sample.commit_url !== undefined) {
         snapshot = await prepareSnapshot(sample.commit_url, sample.target, sample.func);
-        const trace: SourceContext = { snapshot: snapshot.metadata, lookups: [] };
-        context = trace;
-        saveContext(id, trace);
-        report = await reviewFunction(sample.func, {
-          root: snapshot.root,
-          location: snapshot.metadata,
-          onLookups(lookups) {
-            trace.lookups = lookups;
-            saveContext(id, trace);
-          },
-        });
-      } else {
-        report = await reviewFunction(sample.func);
+        context.snapshot = snapshot.metadata;
+        context.lookups = [];
+        saveContext(id, context);
       }
+      report = await reviewFunction(sample.func, snapshot && {
+        root: snapshot.root,
+        location: snapshot.metadata,
+        onLookups(lookups) {
+          context.lookups = lookups;
+          saveContext(id, context);
+        },
+      }, searches && ((query) => {
+        try {
+          const result = searchCases(knowledge, query);
+          searches.push(result);
+          return result;
+        } catch (cause) {
+          searches.push({ query, error: cause instanceof Error ? cause.message : String(cause) });
+          throw cause;
+        } finally {
+          saveContext(id, context);
+        }
+      }));
       completeReport(id, report);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -72,7 +89,7 @@ export async function auditOne(args: string[]) {
     } finally {
       await snapshot?.dispose();
     }
-    console.log(JSON.stringify({ id, idx, ...report, ...(context ? { context } : {}) }, null, 2));
+    console.log(JSON.stringify({ id, idx, ...report, ...(Object.keys(context).length ? { context } : {}) }, null, 2));
     return;
   }
   throw new Error(`Sample ${idx} was not found in test.jsonl.`);

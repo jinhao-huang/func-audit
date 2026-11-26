@@ -3,8 +3,10 @@ import { DatabaseSync } from "node:sqlite";
 import type { reviewFunction } from "./review.ts";
 import type { SnapshotMetadata } from "./snapshot.ts";
 import type { Lookup } from "./source-tools.ts";
+import type { CaseSearch } from "./cases.ts";
 
-export type SourceContext = { snapshot: SnapshotMetadata; lookups: Lookup[] };
+export type CaseSearchRecord = CaseSearch | { query: string; error: string };
+export type AuditContext = { snapshot?: SnapshotMetadata; lookups?: Lookup[]; caseSearches?: CaseSearchRecord[] };
 
 const databasePath = ".func-audit.sqlite";
 
@@ -35,7 +37,7 @@ export function startReport(idx: number, source: string, model: string) {
   return Number(row.lastInsertRowid);
 }
 
-export function saveContext(id: number, context: SourceContext) {
+export function saveContext(id: number, context: AuditContext) {
   using db = new DatabaseSync(databasePath, { timeout: 5000 });
   db.prepare("INSERT OR REPLACE INTO report_context (reportId, context) VALUES (?, ?)").run(id, JSON.stringify(context));
 }

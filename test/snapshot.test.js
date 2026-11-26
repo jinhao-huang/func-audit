@@ -84,6 +84,8 @@ test("Pi uses the selected snapshot and saved evidence survives its removal", as
     ...process.env, FUNC_AUDIT_API_KEY: "fixture", FUNC_AUDIT_BASE_URL: "https://model.invalid/v1",
     FUNC_AUDIT_MODEL: "fixture",
   });
+  let withCases = true;
+  await writeFile("knowledge.eval.jsonl", JSON.stringify({ func: "void copy_value(int);", cve: "CVE-2020-1234", cve_desc: "A helper example." }));
   let requests = [];
   let rounds = 0;
   let grepResult;
@@ -95,7 +97,7 @@ test("Pi uses the selected snapshot and saved evidence survives its removal", as
     if (req.url.startsWith("https://codeload.github.com/")) return new Response(archive);
     assert.equal(req.url, "https://model.invalid/v1/chat/completions");
     const body = await req.json();
-    assert.deepEqual(body.tools.map((tool) => tool.function.name).sort(), ["grep", "read"]);
+    assert.deepEqual(body.tools.map((tool) => tool.function.name).sort(), withCases ? ["grep", "read", "search_cases"] : ["grep", "read"]);
     const messages = JSON.stringify(body.messages);
     for (const hidden of [link, commit, parent, "commit_url", dir]) assert.ok(!messages.includes(hidden));
     assert.match(messages, /src\/main.c/);
@@ -127,12 +129,16 @@ test("Pi uses the selected snapshot and saved evidence survives its removal", as
   assert.equal(requests[1], `https://codeload.github.com/example/demo/tar.gz/${parent}`);
   const saved = readReport(output.id);
   assert.deepEqual(saved.context, output.context);
+  assert.deepEqual(saved.context.caseSearches, []);
+  assert.equal(existsSync("knowledge.eval.jsonl.sqlite"), false);
   assert.deepEqual(saved.context.snapshot, {
     repository: "example/demo", revision: parent, path: "src/main.c", startLine: 2, endLine: 4,
   });
   assert.equal(saved.context.lookups[1].result, "int copy_value(int x) {\n  return x;");
   assert.deepEqual(saved.evidence, [{ path: "src/helper.c", startLine: 2, endLine: 2, source: "  return x;" }]);
 
+  withCases = false;
+  await rename("knowledge.eval.jsonl", "knowledge.jsonl");
   await writeFile("test.jsonl", JSON.stringify({ idx: 7, func, target: 0, commit_url: link }));
   requests = [];
   rounds = 0;

@@ -1,10 +1,13 @@
 import {
   createAgentSession,
+  defineTool,
   createExtensionRuntime,
   type ResourceLoader,
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import type { CaseSearch } from "./cases.ts";
 import { projectApi } from "./project-api.ts";
 import { sourceTools, type Lookup } from "./source-tools.ts";
 import type { SnapshotMetadata } from "./snapshot.ts";
@@ -69,43 +72,65 @@ export async function reviewFunction(source: string, snapshot?: {
   root: string;
   location: Pick<SnapshotMetadata, "path" | "startLine" | "endLine">;
   onLookups: (lookups: Lookup[]) => void;
-}) {
+}, searchCases?: (query: string) => CaseSearch) {
   const { modelRuntime, model } = await projectApi();
   const lines = source.split(/\r?\n/);
   const numbered = lines.map((line, i) => `${i + 1} | ${line}`).join("\n");
   let lookups: Lookup[] = [];
   let traceFailure: Error | undefined;
-  const tools = snapshot ? sourceTools(snapshot.root, (lookup) => {
-    const next = [...lookups, lookup];
-    try {
-      snapshot.onLookups(next);
-    } catch (cause) {
-      traceFailure = new Error(`Could not save snapshot lookup: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
-      session.agent.abort();
-      throw traceFailure;
-    }
-    lookups = next;
-  }) : [];
+  function abortReview(message: string, cause: unknown): never {
+    traceFailure = new Error(`${message}: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    session.agent.abort();
+    throw traceFailure;
+  }
+  const tools = [
+    ...(snapshot ? sourceTools(snapshot.root, (lookup) => {
+      const next = [...lookups, lookup];
+      try {
+        snapshot.onLookups(next);
+      } catch (cause) {
+        abortReview("Could not save snapshot lookup", cause);
+      }
+      lookups = next;
+    }) : []),
+    ...(searchCases ? [defineTool({
+      name: "search_cases", label: "Search historical cases",
+      description: "Look up historical maintenance cases by identifiers, APIs, or short English descriptions.",
+      parameters: Type.Object({ query: Type.String({ minLength: 1, maxLength: 500 }) }),
+      execute: async (_id, { query }) => {
+        try {
+          const result = searchCases(query);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: undefined };
+        } catch (cause) {
+          abortReview("Historical case lookup failed", cause);
+        }
+      },
+    })] : []),
+  ];
   const guidance = snapshot
     ? "Use grep or read when the supplied function needs context. For evidence from read, include "
       + "the requested path and inclusive file line numbers. For the supplied function, omit path "
       + "and use the numbered function lines."
-    : "Use only the supplied function.";
+    : "Cite the numbered lines of the supplied function.";
+  const caseGuidance = searchCases
+    ? "\nHistorical cases are analogies. Verify any conclusion against the current source and cite only that source."
+    : "";
   const { session } = await createAgentSession({
     cwd: "/",
     model,
     modelRuntime,
     settingsManager: SettingsManager.inMemory(),
-    resourceLoader: { ...resources, getSystemPrompt: () => `${auditInstructions}\n${guidance}` },
+    resourceLoader: { ...resources, getSystemPrompt: () => `${auditInstructions}\n${guidance}${caseGuidance}` },
     sessionManager: SessionManager.inMemory("/"),
     tools: tools.map((tool) => tool.name),
     customTools: tools,
   });
   try {
     const location = snapshot?.location;
-    await session.prompt(location
+    const functionText = location
       ? `Function at ${location.path}, file lines ${location.startLine}–${location.endLine}.\n\n${numbered}`
-      : numbered);
+      : numbered;
+    await session.prompt(functionText);
     if (traceFailure) throw traceFailure;
     const message = session.messages.findLast((entry) => entry.role === "assistant");
     if (message?.stopReason !== "stop") {

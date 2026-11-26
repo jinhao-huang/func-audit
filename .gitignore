@@ -2,3 +2,5 @@ node_modules/
 .pnpm-store/
 /mise.local.toml
 /.func-audit.sqlite*
+*.jsonl.sqlite*
+knowledge.eval.jsonl
