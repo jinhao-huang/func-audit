@@ -14,7 +14,9 @@ export async function runAudit(id: number, sample: Sample) {
     }
     const cases = existsSync(knowledgePath);
     recordEvent(id, { kind: "prepare", snapshot: sample.commit_url !== undefined, cases });
-    if (sample.commit_url !== undefined) snapshot = await prepareSnapshot(sample.commit_url, sample.target!, sample.func);
+    if (sample.commit_url !== undefined) {
+      snapshot = await prepareSnapshot(sample.commit_url, sample.target!, sample.func, event => recordEvent(id, event));
+    }
     recordEvent(id, { kind: "review", snapshot: snapshot?.metadata });
     const report = await reviewFunction(sample.func, snapshot && {
       root: snapshot.root, location: snapshot.metadata,

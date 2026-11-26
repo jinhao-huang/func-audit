@@ -36,6 +36,7 @@ export function initializeReports() {
     CREATE TABLE IF NOT EXISTS executor (id INTEGER PRIMARY KEY CHECK(id = 1), pid INTEGER NOT NULL, capacity INTEGER NOT NULL, endpoint TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS reports_by_run ON reports(runId);
     CREATE INDEX IF NOT EXISTS report_events_by_report ON report_events(reportId, seq);
+    CREATE UNIQUE INDEX IF NOT EXISTS latest_download ON report_events(reportId) WHERE json_extract(event, '$.kind') = 'download';
     CREATE INDEX IF NOT EXISTS queued_reports ON reports(id) WHERE status = 'queued';
   `);
   if (db.prepare("SELECT 1 FROM pragma_table_info('runs') WHERE name = 'pair'").get()) {

@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { openDatabase as open } from "./database.ts";
 import type { reviewFunction } from "./review.ts";
-import type { SnapshotMetadata } from "./snapshot.ts";
+import type { SnapshotMetadata, SnapshotProgress } from "./snapshot.ts";
 import type { Lookup } from "./source-tools.ts";
 import type { CaseSearch } from "./cases.ts";
 
@@ -14,6 +14,7 @@ type SavedReport = Summary & { source: string; reason: string | null; error: str
 export type AuditEvent =
   | { kind: "accepted" }
   | { kind: "prepare"; cases: boolean; snapshot: boolean }
+  | SnapshotProgress
   | { kind: "review"; snapshot?: SnapshotMetadata }
   | { kind: "tool"; callId: string; name: string; args: object }
   | { kind: "lookup"; callId: string; lookup: Lookup }
@@ -22,7 +23,8 @@ export type Entry = { seq: number; event: AuditEvent };
 
 export function recordEvent(id: number, event: AuditEvent) {
   using db = open();
-  db.prepare("INSERT INTO report_events (reportId, event) VALUES (?, ?)").run(id, JSON.stringify(event));
+  // Replacing the download row gives it a new SSE cursor and keeps only the latest byte count.
+  db.prepare("INSERT OR REPLACE INTO report_events (reportId, event) VALUES (?, ?)").run(id, JSON.stringify(event));
 }
 
 export function completeReport(id: number, report: Result) {

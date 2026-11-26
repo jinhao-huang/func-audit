@@ -9,7 +9,7 @@ import test from "node:test";
 import { promisify } from "node:util";
 import { gzipSync } from "node:zlib";
 import { reviewSample } from "../verification/audit-fixture.mjs";
-import { readReport } from "../src/reports.ts";
+import { readReport, reportUpdates } from "../src/reports.ts";
 import { prepareSnapshot } from "../src/snapshot.ts";
 import { sourceTools } from "../src/source-tools.ts";
 
@@ -123,6 +123,9 @@ test("Pi uses the selected snapshot and saved evidence survives its removal", as
   });
   const run = () => reviewSample(sample);
   const output = await run();
+  const stages = reportUpdates(output.id, 0).entries.map(({ event }) => event);
+  assert.deepEqual(stages.slice(0, 5).map(e => e.kind), ["prepare", "download", "extract", "locate", "review"]);
+  assert.deepEqual(stages[1], { kind: "download", bytes: archive.length });
   assert.equal(rounds, 3);
   assert.equal(requests[0], `https://api.github.com/repos/example/demo/git/commits/${commit}`);
   assert.equal(requests[1], `https://codeload.github.com/example/demo/tar.gz/${parent}`);

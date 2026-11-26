@@ -1,12 +1,18 @@
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { createWriteStream, existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Writable } from "node:stream";
 import { promisify } from "node:util";
 
 const exec = promisify(execFile);
 const sha = /^[0-9a-f]{40}$/;
+
+export type SnapshotProgress =
+  | { kind: "download"; bytes: number; total?: number }
+  | { kind: "extract" }
+  | { kind: "locate" };
 
 function commitLocation(link: string) {
   const github = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/commit\/([0-9a-f]{40})\/?$/.exec(link);
@@ -37,7 +43,8 @@ async function checkArchiveCase(archive: string) {
   }
 }
 
-export async function prepareSnapshot(link: string, target: number, source: string) {
+export async function prepareSnapshot(link: string, target: number, source: string,
+  onProgress?: (event: SnapshotProgress) => void) {
   const { repository, commit } = commitLocation(link);
   if (target !== 0 && target !== 1) throw new Error("Snapshot preparation requires a binary target.");
   let revision = commit;
@@ -55,12 +62,33 @@ export async function prepareSnapshot(link: string, target: number, source: stri
     const root = join(await realpath(temp), "source");
     await mkdir(root);
     const archive = join(temp, "snapshot.tar.gz");
+    onProgress?.({ kind: "download", bytes: 0 });
     const response = await download(`https://codeload.github.com/${repository}/tar.gz/${revision}`);
     if (!response.body) throw new Error("The source archive is empty.");
-    await writeFile(archive, response.body);
+    const size = Number(response.headers.get("content-length"));
+    const total = Number.isSafeInteger(size) && size > 0 && !response.headers.has("content-encoding") ? size : undefined;
+    if (total) onProgress?.({ kind: "download", bytes: 0, total });
+    const file = createWriteStream(archive);
+    let reported = 0;
+    const publish = () => {
+      if (file.bytesWritten === reported) return;
+      reported = file.bytesWritten;
+      onProgress?.({ kind: "download", bytes: reported, total });
+    };
+    const timer = setInterval(() => {
+      try { publish(); } catch (error) { file.destroy(error as Error); }
+    }, 1000);
+    try {
+      await response.body.pipeTo(Writable.toWeb(file));
+    } finally {
+      clearInterval(timer);
+      publish();
+    }
+    onProgress?.({ kind: "extract" });
     // A Git tree can contain both xt_DSCP.h and xt_dscp.h.
     if (existsSync(join(temp, "SOURCE"))) await checkArchiveCase(archive);
     await exec("tar", ["-xzf", archive, "--strip-components=1", "-C", root]);
+    onProgress?.({ kind: "locate" });
     const location = await locateFunction(root, source);
     return { root, metadata: { repository, revision, ...location }, dispose };
   } catch (error) {

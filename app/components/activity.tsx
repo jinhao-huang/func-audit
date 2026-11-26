@@ -1,4 +1,4 @@
-import { BookOpenIcon, ClipboardListIcon, FileTextIcon, FolderOpenIcon, SearchIcon, ScanTextIcon } from "lucide-react";
+import { ArchiveIcon, BookOpenIcon, ClipboardListIcon, DownloadIcon, FileTextIcon, FolderOpenIcon, SearchIcon, ScanTextIcon } from "lucide-react";
 import type { AuditEvent, Entry } from "../../src/reports.ts";
 import { CodeBlock, CodeBlockContent, CodeBlockHeader, CodeBlockTitle } from "./ui/code-block";
 import { Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger, TraceDescription, TraceIcon, TraceLine, TraceTitle } from "./ui/trace";
@@ -10,6 +10,16 @@ function milestone(event: Extract<AuditEvent, { kind: "accepted" | "prepare" | "
   if (event.kind === "prepare") return { Icon: FolderOpenIcon, title: event.snapshot ? "Preparing the source snapshot" : "Preparing the submitted function" };
   const location = event.snapshot;
   return { Icon: ScanTextIcon, title: location ? `Review started · ${location.path} · L${location.startLine}–${location.endLine}` : "Review started" };
+}
+
+export const snapshotStages = {
+  download: "Downloading the source archive", extract: "Extracting the source archive", locate: "Locating the submitted function",
+};
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / 1024 ** 2).toFixed(2)} MiB`;
 }
 
 type ToolEvent = Extract<AuditEvent, { callId: string }>;
@@ -42,9 +52,25 @@ export function Activity({ entries, active, expanded, setOpen, citation }: {
 }) {
   // Replacing a call with its result keeps it at the position where it started.
   const rows = new Map<string | number, AuditEvent>();
-  for (const { seq, event } of entries) rows.set("callId" in event ? event.callId : seq, event);
+  for (const { seq, event } of entries) rows.set("callId" in event ? event.callId : event.kind === "download" ? -1 : seq, event);
+  const latestKind = entries.at(-1)?.event.kind;
   return <Trace aria-label="Audit activity" role="list" className="border-s ps-3">
     {Array.from(rows, ([key, event]) => {
+      if (event.kind === "download") {
+        const inProgress = active && latestKind === "download";
+        return <div role="listitem" key={key} className="flex-col items-start gap-1">
+          <TraceLine><TraceIcon><DownloadIcon /></TraceIcon><TraceTitle>Source download</TraceTitle>
+            <TraceDescription>{formatBytes(event.bytes)}{event.total && ` / ${formatBytes(event.total)}`}</TraceDescription>
+          </TraceLine>
+          {inProgress && event.total !== undefined && <progress className="ms-6 w-36" aria-label="Source archive download"
+            max={event.total} value={event.bytes} />}
+        </div>;
+      }
+      if (event.kind === "extract" || event.kind === "locate") {
+        const Icon = event.kind === "extract" ? ArchiveIcon : SearchIcon;
+        return <div role="listitem" key={key}><TraceLine><TraceIcon><Icon /></TraceIcon>
+          <TraceTitle>{snapshotStages[event.kind]}</TraceTitle></TraceLine></div>;
+      }
       if (!("callId" in event)) {
         const { Icon, title } = milestone(event);
         return <div role="listitem" key={key}><TraceLine><TraceIcon><Icon /></TraceIcon><TraceTitle>{title}</TraceTitle></TraceLine></div>;

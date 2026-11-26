@@ -54,7 +54,7 @@ mise run export 3 > data/results/predictions.jsonl
 
 ## 打开工作台
 
-运行 `mise run dev`，打开终端显示的本地地址。选择 **New audit → Course pairs**，输入范围，核对样本对数和报告数后点击 **Start audit**。点击左侧的运行可查看整批进度和逐对成绩，展开样本对可打开报告。排队中和运行中的报告默认打开 **Timeline**。展开工具调用即可查看参数和返回结果。已结束的报告默认打开 **Verdict**。点击结论、时间线或 **Evidence** 页中的源码引用，可跳到提交函数或快照读取记录里的对应行。关闭页面后评测仍会继续。
+运行 `mise run dev`，打开终端显示的本地地址。选择 **New audit → Course pairs**，输入范围，核对样本对数和报告数后点击 **Start audit**。点击左侧的运行可查看整批进度和逐对成绩，展开样本对可打开报告。排队中和运行中的报告默认打开 **Timeline**。下载源码快照时可以看到已下载的数据量。服务器提供总大小时，还会显示下载进度条。下载完成后，时间线依次记录解压和定位函数。展开工具调用即可查看参数和返回结果。已结束的报告默认打开 **Verdict**。点击结论、时间线或 **Evidence** 页中的源码引用，可跳到提交函数或快照读取记录里的对应行。关闭页面后评测仍会继续。
 
 临时检查一个函数时，选择 **Single function**，粘贴一条 JSON，例如 `{"idx":1,"func":"int one() { return 1; }"}`。可选的 `target` 取值为 0 或 1，用于核对这份报告的判断。如需运行生产构建，在仓库根目录依次执行 `mise exec -- pnpm build` 和 `mise exec -- pnpm start`。
 

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useRevalidator } from "react-router";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Activity } from "@/components/activity";
+import { Activity, snapshotStages } from "@/components/activity";
 import { startedAt, Status } from "@/components/status";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -53,7 +53,7 @@ export default function ReportRoute({ loaderData: { report, entries } }: Route.C
       const entry: Entry = JSON.parse(message.data);
       setUpdates(previous => {
         if ((previous.at(-1)?.seq ?? cursor) >= entry.seq) return previous;
-        return [...previous.filter(item => item.seq > cursor), entry];
+        return [...previous.filter(item => item.seq > cursor && !(entry.event.kind === "download" && item.event.kind === "download")), entry];
       });
       if (entry.event.kind === "prepare" && report.status === "queued") void revalidate();
     };
@@ -66,7 +66,9 @@ export default function ReportRoute({ loaderData: { report, entries } }: Route.C
   const status = report.status === "queued" && prepare ? "running" : report.status;
   const badge = <Status report={{ ...report, status }} />;
   const snapshot = review?.kind === "review" ? review.snapshot : undefined;
-  const stage = review ? "Reviewing the function" : prepare?.kind === "prepare"
+  const latest = history.at(-1)?.event.kind;
+  const stage = latest === "download" || latest === "extract" || latest === "locate" ? snapshotStages[latest]
+    : review ? "Reviewing the function" : prepare?.kind === "prepare"
     ? (prepare.snapshot ? "Preparing the source snapshot" : "Preparing the submitted function")
     : report.status === "queued" ? "Waiting for an audit slot" : "Starting the audit";
   const prediction = report.prediction == null ? "No prediction" : report.prediction === 1 ? "Potential vulnerability" : "No finding";
