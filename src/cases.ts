@@ -2,7 +2,14 @@ import { readFileSync, statSync } from "node:fs";
 import { basename } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-export type CaseHit = { line: number; cve: string; cwe: string; description: string; excerpt: string };
+export type CaseHit = {
+  line: number;
+  cve: string;
+  cwe: string;
+  description: string;
+  commitMessage: string;
+  excerpt: string;
+};
 export type CaseSearch = { query: string; hits: CaseHit[] };
 
 function refreshIndex(db: DatabaseSync, file: string, stamp: string) {
@@ -46,6 +53,8 @@ export function searchCases(file: string, query: string): CaseSearch {
   refreshIndex(db, file, `${info.size}:${info.mtimeNs}`);
   const ranked = db.prepare(`
     SELECT rowid, cve, cwe, substr(description, 1, 900) AS description,
+           CASE WHEN length(message) <= 800 THEN message
+                ELSE substr(snippet(cases, 2, '', '', ' … ', 32), 1, 800) END AS commitMessage,
            substr(snippet(cases, 0, '', '', ' … ', 32), 1, 800) AS excerpt
     FROM cases WHERE cases MATCH ? ORDER BY rank, rowid
   `);
@@ -58,7 +67,7 @@ export function searchCases(file: string, query: string): CaseSearch {
       if (cves.has(cve)) continue;
       cves.add(cve);
       hits.push({ line: Number(row.rowid), cve, cwe: String(row.cwe),
-        description: String(row.description), excerpt: String(row.excerpt) });
+        description: String(row.description), commitMessage: String(row.commitMessage), excerpt: String(row.excerpt) });
       if (hits.length === 3) break;
     }
   }

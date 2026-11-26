@@ -29,9 +29,14 @@ test("BM25 returns the best match per CVE and refreshes a changed corpus", async
   assert.equal(search("rare_operation copy_item").hits[0].line, 6);
   assert.deepEqual(search('absent + "unmatched').hits, []);
   assert.equal(search("CWE-20").hits.length, 3);
-  await writeFile(file, JSON.stringify(historical("new", "new", "void only_new(void);")));
+  const updated = historical("new", "new", "void only_new(void);");
+  updated.commit_message = "Background detail. ".repeat(60) + "Initialize the cache.";
+  await writeFile(file, JSON.stringify(updated));
   assert.deepEqual(search("copy_item").hits, []);
   assert.deepEqual(search("only_new").hits.map((hit) => hit.line), [1]);
+  const [hit] = search("initialize").hits;
+  assert.match(hit.commitMessage, /Initialize the cache\./);
+  assert.ok(hit.commitMessage.length <= 800);
 });
 
 test("Pi receives historical cases only through its own search", async (t) => {
@@ -68,8 +73,9 @@ test("Pi receives historical cases only through its own search", async (t) => {
     } else {
       search = JSON.parse(followup.content);
       assert.equal(search.query, "length");
-      assert.deepEqual(search.hits.map((hit) => hit.cve), ["example-case"]);
-      assert.equal(search.hits[0].line, 1);
+      assert.deepEqual(search.hits, [{ line: 1, cve: "example-case", cwe: "CWE-20",
+        description: "Validate the item length.", commitMessage: "Check the supplied size.",
+        excerpt: "int copy_item(void);" }]);
       delta = { content: JSON.stringify({ prediction: 0, reason: "Returns the helper result.",
         evidence: [{ startLine: 1, endLine: 1 }] }) };
     }
