@@ -87,7 +87,7 @@ function RunItem({ run, current, currentReport }: {
     <div className="flex items-center">
       <NavLink to={`/runs/${run.id}`} className="task-link flex-1">
         <strong>Run #{run.id} · {run.pairs} {run.pairs === 1 ? "pair" : "pairs"}</strong>
-        <span className="hint text-xs">{run.finished}/{run.total} finished{run.failed > 0 && ` · ${run.failed} failed`}</span>
+        <span className="hint text-xs">{run.finished}/{run.total} finished{run.failed > 0 && ` · ${run.failed} failed`}{run.canceled > 0 && ` · ${run.canceled} canceled`}</span>
       </NavLink>
       <CollapsibleTrigger render={<Button variant="ghost" size="icon-sm" />} aria-label={`Pairs for run ${run.id}`}><ChevronDownIcon /></CollapsibleTrigger>
     </div>

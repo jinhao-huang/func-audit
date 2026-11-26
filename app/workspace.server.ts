@@ -1,4 +1,4 @@
-import { initializeReports } from "../src/database.ts";
+import { initializeReports, openDatabase } from "../src/database.ts";
 import { refreshQueue } from "../src/queue.ts";
 import { getSavedRun, reportDetail } from "../src/reports.ts";
 import { coversCitation } from "../src/evidence.ts";
@@ -21,6 +21,16 @@ export function routeId(value: string) {
   const id = Number(value);
   if (!/^\d+$/.test(value) || !Number.isSafeInteger(id) || id < 1) throw new Response("Invalid ID.", { status: 404 });
   return id;
+}
+
+export async function cancelAudit(request: Request, scope: "report" | "run", value: string) {
+  const id = routeId(value);
+  if (request.method !== "POST") throw new Response("Use POST to cancel.", { status: 405 });
+  if ((await request.formData()).get("intent") !== "cancel") throw new Response("Unknown action.", { status: 400 });
+  using db = openDatabase();
+  const column = scope === "run" ? "runId" : "id";
+  db.prepare(`UPDATE reports SET status = 'canceled' WHERE ${column} = ? AND status IN ('queued','running')`).run(id);
+  return null;
 }
 
 export function getReport(value: string) {

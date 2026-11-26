@@ -5,7 +5,7 @@ import { reviewFunction } from "./review.ts";
 import { knowledgePath, type Sample } from "./samples.ts";
 import { prepareSnapshot } from "./snapshot.ts";
 
-export async function runAudit(id: number, sample: Sample) {
+export async function runAudit(id: number, sample: Sample, signal?: AbortSignal) {
   let snapshot: Awaited<ReturnType<typeof prepareSnapshot>> | undefined;
   try {
     // The OpenAI client merges ambient headers into explicitly configured requests.
@@ -15,8 +15,9 @@ export async function runAudit(id: number, sample: Sample) {
     const cases = existsSync(knowledgePath);
     recordEvent(id, { kind: "prepare", snapshot: sample.commit_url !== undefined, cases });
     if (sample.commit_url !== undefined) {
-      snapshot = await prepareSnapshot(sample.commit_url, sample.target!, sample.func, event => recordEvent(id, event));
+      snapshot = await prepareSnapshot(sample.commit_url, sample.target!, sample.func, event => recordEvent(id, event), signal);
     }
+    signal?.throwIfAborted();
     recordEvent(id, { kind: "review", snapshot: snapshot?.metadata });
     const report = await reviewFunction(sample.func, snapshot && {
       root: snapshot.root, location: snapshot.metadata,
@@ -31,9 +32,10 @@ export async function runAudit(id: number, sample: Sample) {
       }
       recordEvent(id, { kind: "cases", callId, search });
       return search;
-    } : undefined, (callId, name, args) => recordEvent(id, { kind: "tool", callId, name, args }));
+    } : undefined, (callId, name, args) => recordEvent(id, { kind: "tool", callId, name, args }), signal);
     completeReport(id, report);
   } catch (cause) {
+    if (signal?.aborted) return;
     const message = cause instanceof Error ? cause.message : String(cause);
     const diagnostic = `Report ${id} failed: ${message}`;
     try {

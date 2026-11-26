@@ -8,7 +8,7 @@ import type { CaseSearch } from "./cases.ts";
 export type CaseSearchRecord = CaseSearch | { query: string; error: string };
 type AuditContext = { snapshot?: SnapshotMetadata; lookups?: Lookup[]; caseSearches?: CaseSearchRecord[] };
 export type Result = Awaited<ReturnType<typeof reviewFunction>>;
-export type ReportStatus = "queued" | "running" | "completed" | "failed";
+export type ReportStatus = "queued" | "running" | "completed" | "failed" | "canceled";
 export type Summary = { id: number; runId: number; idx: number; model: string; startedAt: string; status: ReportStatus; target: number | null; prediction: number | null };
 type SavedReport = Summary & { source: string; reason: string | null; error: string | null; evidence: Result["evidence"] | null };
 export type AuditEvent =
@@ -24,7 +24,8 @@ export type Entry = { seq: number; event: AuditEvent };
 export function recordEvent(id: number, event: AuditEvent) {
   using db = open();
   // Replacing the download row gives it a new SSE cursor and keeps only the latest byte count.
-  db.prepare("INSERT OR REPLACE INTO report_events (reportId, event) VALUES (?, ?)").run(id, JSON.stringify(event));
+  db.prepare(`INSERT OR REPLACE INTO report_events (reportId, event)
+    SELECT id, ? FROM reports WHERE id = ? AND status = 'running'`).run(JSON.stringify(event), id);
 }
 
 export function completeReport(id: number, report: Result) {
@@ -60,13 +61,14 @@ export function listRuns() {
   return db.prepare(`
     SELECT r.runId AS id, MIN(r.id) AS firstReport, MIN(r.idx) AS idx, MIN(r.status) AS status, MIN(r.target) AS target, MIN(r.prediction) AS prediction,
       (SELECT COUNT(*) FROM run_pairs WHERE runId = r.runId) AS pairs,
-      COUNT(*) AS total, SUM(status IN ('completed','failed')) AS finished, SUM(status = 'failed') AS failed
+      COUNT(*) AS total, SUM(status NOT IN ('queued','running')) AS finished, SUM(status = 'failed') AS failed, SUM(status = 'canceled') AS canceled
     FROM reports r GROUP BY runId ORDER BY runId DESC
-  `).all() as (Pick<Summary, "id" | "idx" | "status" | "target" | "prediction"> & { firstReport: number; pairs: number; total: number; finished: number; failed: number })[];
+  `).all() as (Pick<Summary, "id" | "idx" | "status" | "target" | "prediction"> & { firstReport: number; pairs: number; total: number; finished: number; failed: number; canceled: number })[];
 }
 
-export function pairGrade(a: Summary, b: Summary): "P-C" | "P-R" | "P-V" | "P-B" | "failed" | "pending" {
+export function pairGrade(a: Summary, b: Summary): "P-C" | "P-R" | "P-V" | "P-B" | "failed" | "canceled" | "pending" {
   if (a.status === "failed" || b.status === "failed") return "failed";
+  if (a.status === "canceled" || b.status === "canceled") return "canceled";
   if (a.status !== "completed" || b.status !== "completed") return "pending";
   if ([a, b].some(r => (r.target !== 0 && r.target !== 1) || (r.prediction !== 0 && r.prediction !== 1)) || a.target === b.target) {
     throw new Error("Invalid pair labels or predictions.");
@@ -78,13 +80,13 @@ export function pairGrade(a: Summary, b: Summary): "P-C" | "P-R" | "P-V" | "P-B"
 export function score(run: Run) {
   if (!run.pairs.length) throw new Error("Course scoring requires a pair run.");
   const reports = new Map(run.reports.map(r => [r.id, r]));
-  const counts = { "P-C": 0, "P-R": 0, "P-V": 0, "P-B": 0, failed: 0, pending: 0 };
+  const counts = { "P-C": 0, "P-R": 0, "P-V": 0, "P-B": 0, failed: 0, canceled: 0, pending: 0 };
   const pairs = run.pairs.map(({ number, firstReport, secondReport }) => {
     const grade = pairGrade(reports.get(firstReport)!, reports.get(secondReport)!);
     counts[grade]++;
     return { number, grade };
   });
-  return { scored: pairs.length - counts.pending - counts.failed, total: pairs.length, counts, pairs };
+  return { scored: pairs.length - counts.pending - counts.failed - counts.canceled, total: pairs.length, counts, pairs };
 }
 
 export function predictions(run: Run) {

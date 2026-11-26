@@ -24,14 +24,14 @@ function commitLocation(link: string) {
   throw new Error("Expected a supported repair commit URL with a full commit ID.");
 }
 
-async function download(url: string) {
-  const response = await fetch(url);
+async function download(url: string, signal?: AbortSignal) {
+  const response = await fetch(url, { signal });
   if (!response.ok) throw new Error(`Snapshot request failed: HTTP ${response.status} at ${url}`);
   return response;
 }
 
-async function checkArchiveCase(archive: string) {
-  const { stdout } = await exec("tar", ["-tzf", archive], { maxBuffer: 64 * 1024 * 1024 });
+async function checkArchiveCase(archive: string, signal?: AbortSignal) {
+  const { stdout } = await exec("tar", ["-tzf", archive], { maxBuffer: 64 * 1024 * 1024, signal });
   const paths = new Map<string, string>();
   for (const path of stdout.trimEnd().split("\n")) {
     const key = path.replace(/\/$/, "").toLowerCase();
@@ -44,12 +44,12 @@ async function checkArchiveCase(archive: string) {
 }
 
 export async function prepareSnapshot(link: string, target: number, source: string,
-  onProgress?: (event: SnapshotProgress) => void) {
+  onProgress?: (event: SnapshotProgress) => void, signal?: AbortSignal) {
   const { repository, commit } = commitLocation(link);
   if (target !== 0 && target !== 1) throw new Error("Snapshot preparation requires a binary target.");
   let revision = commit;
   if (target === 1) {
-    const response = await download(`https://api.github.com/repos/${repository}/git/commits/${commit}`);
+    const response = await download(`https://api.github.com/repos/${repository}/git/commits/${commit}`, signal);
     const { parents } = await response.json();
     if (!Array.isArray(parents) || parents.length !== 1 || !sha.test(parents[0]?.sha)) {
       throw new Error("The repair commit must have one identifiable parent.");
@@ -63,7 +63,7 @@ export async function prepareSnapshot(link: string, target: number, source: stri
     await mkdir(root);
     const archive = join(temp, "snapshot.tar.gz");
     onProgress?.({ kind: "download", bytes: 0 });
-    const response = await download(`https://codeload.github.com/${repository}/tar.gz/${revision}`);
+    const response = await download(`https://codeload.github.com/${repository}/tar.gz/${revision}`, signal);
     if (!response.body) throw new Error("The source archive is empty.");
     const size = Number(response.headers.get("content-length"));
     const total = Number.isSafeInteger(size) && size > 0 && !response.headers.has("content-encoding") ? size : undefined;
@@ -79,17 +79,17 @@ export async function prepareSnapshot(link: string, target: number, source: stri
       try { publish(); } catch (error) { file.destroy(error as Error); }
     }, 1000);
     try {
-      await response.body.pipeTo(Writable.toWeb(file));
+      await response.body.pipeTo(Writable.toWeb(file), { signal });
     } finally {
       clearInterval(timer);
       publish();
     }
     onProgress?.({ kind: "extract" });
     // A Git tree can contain both xt_DSCP.h and xt_dscp.h.
-    if (existsSync(join(temp, "SOURCE"))) await checkArchiveCase(archive);
-    await exec("tar", ["-xzf", archive, "--strip-components=1", "-C", root]);
+    if (existsSync(join(temp, "SOURCE"))) await checkArchiveCase(archive, signal);
+    await exec("tar", ["-xzf", archive, "--strip-components=1", "-C", root], { signal });
     onProgress?.({ kind: "locate" });
-    const location = await locateFunction(root, source);
+    const location = await locateFunction(root, source, signal);
     return { root, metadata: { repository, revision, ...location }, dispose };
   } catch (error) {
     await dispose();
@@ -97,19 +97,19 @@ export async function prepareSnapshot(link: string, target: number, source: stri
   }
 }
 
-async function locateFunction(root: string, source: string) {
+async function locateFunction(root: string, source: string, signal?: AbortSignal) {
   // Course snippets can differ in indentation and blank lines from the checked-in source.
   const wanted = source.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const anchor = wanted.reduce((best, line) => line.length > best.length ? line : best);
   const { stdout } = await exec("rg", [
     "--no-config", "--no-ignore", "--hidden", "-l", "-0", "-F", "--", anchor, ".",
-  ], { cwd: root, maxBuffer: 16 * 1024 * 1024 }).catch((error) => {
+  ], { cwd: root, maxBuffer: 16 * 1024 * 1024, signal }).catch((error) => {
     if (error.code === 1) return { stdout: "" };
     throw error;
   });
   let match: { path: string; startLine: number; endLine: number } | undefined;
   for (const file of stdout.split("\0").filter(Boolean)) {
-    const raw = await readFile(join(root, file), "utf8");
+    const raw = await readFile(join(root, file), { encoding: "utf8", signal });
     const lines = raw.split(/\r?\n/).map((text, index) => ({ text: text.trim(), number: index + 1 }))
       .filter((line) => line.text);
     for (let i = 0; i + wanted.length <= lines.length; i++) {

@@ -2,17 +2,19 @@ import { useEffect, useState } from "react";
 import { Link, useRevalidator } from "react-router";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Activity, snapshotStages } from "@/components/activity";
+import { CancelAudit } from "@/components/cancel-audit";
 import { startedAt, Status } from "@/components/status";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { CodeBlock, CodeBlockHeader, CodeBlockTitle } from "@/components/ui/code-block";
 import { SourceLines } from "@/components/source-lines";
 import type { Entry } from "../../src/reports.ts";
-import { getReport } from "../workspace.server";
+import { cancelAudit, getReport } from "../workspace.server";
 import type { Route } from "./+types/report";
 
 export const meta = ({ params }: Route.MetaArgs) => [{ title: `Report #${params.id} · Function Audit` }];
 export function loader({ params }: Route.LoaderArgs) { return getReport(params.id); }
+export function action({ request, params }: Route.ActionArgs) { return cancelAudit(request, "report", params.id); }
 
 export default function ReportRoute({ loaderData: { report, entries } }: Route.ComponentProps) {
   const { revalidate } = useRevalidator();
@@ -88,7 +90,10 @@ export default function ReportRoute({ loaderData: { report, entries } }: Route.C
         <p className="hint mb-1">Sample {report.idx} · {startedAt(report.startedAt)}</p>
         <h1 className="text-2xl">Report #{report.id}</h1>
       </div>
-      <Link to={`/runs/${report.runId}`} className={buttonVariants({ variant: "outline", size: "sm" })}>Run #{report.runId}</Link>
+      <div className="flex items-center gap-2">
+        <Link to={`/runs/${report.runId}`} className={buttonVariants({ variant: "outline", size: "sm" })}>Run #{report.runId}</Link>
+        {live && <CancelAudit scope="report" id={report.id} />}
+      </div>
     </header>
     <Tabs value={section} onValueChange={value => { setSection(value); setCitation(undefined); }} className="report-tabs min-w-0 gap-5">
       <div className="shrink-0 overflow-x-auto border-b pb-1">
@@ -105,7 +110,7 @@ export default function ReportRoute({ loaderData: { report, entries } }: Route.C
           <Activity entries={history} active={live} expanded={expanded} setOpen={setCallOpen} citation={citation} />
           {!live && <section className="flex flex-col gap-2 border-t pt-3">
             {!history.some(({ event }) => "callId" in event) && <p className="hint">No tool calls recorded.</p>}
-            <h3 className="font-semibold">{report.status === "failed" ? "Audit failed" : `Audit completed · ${prediction}`}</h3>
+            <h3 className="font-semibold">{report.status === "canceled" ? "Audit canceled" : report.status === "failed" ? "Audit failed" : `Audit completed · ${prediction}`}</h3>
             {report.error && <p className="wrap-anywhere text-destructive">{report.error}</p>}
             {explanation}{references}
           </section>}
