@@ -92,7 +92,7 @@ test("prepare, audit, reopen and grade independent attempts at the same pair", {
   const receipts = await Promise.all([run("audit", "1"), run("audit", "all")]);
   const [first, second] = receipts.map(({ stdout }) => JSON.parse(stdout)).sort((a, b) => a.id - b.id);
   assert.deepEqual([first, second], [{ id: 1, pairs: 1, reports: 2 }, { id: 2, pairs: 1, reports: 2 }]);
-  using db = new DatabaseSync(join(cwd, "data/results/runs.sqlite"));
+  using db = new DatabaseSync(join(cwd, "data/results/runs.sqlite"), { readOnly: true, timeout: 5000 });
   async function waitForRun(id) {
     while (db.prepare("SELECT 1 FROM reports WHERE runId=? AND status IN ('queued','running')").get(id)) await delay(40);
   }
