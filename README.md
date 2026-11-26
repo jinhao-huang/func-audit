@@ -33,7 +33,7 @@ The CLI reads `test.jsonl`, with one JSON object per line. Each sample needs a n
 {"idx":1,"func":"int identity(int value) {\n  return value;\n}"}
 ```
 
-Pass the directory containing the file and the sample ID:
+Pass the directory containing the file and the sample ID. For a course dataset stored in the repository's Git-ignored `data/` directory, use `--dataset-dir ./data` and an ID from its `test.jsonl`.
 
 ```sh
 mise exec -- pnpm --silent audit:one --dataset-dir /path/to/dataset --idx 1

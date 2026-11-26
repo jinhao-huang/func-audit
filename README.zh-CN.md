@@ -33,7 +33,7 @@ CLI 从 `test.jsonl` 读取数据，每行一个 JSON 对象。`idx` 是非负�
 {"idx":1,"func":"int identity(int value) {\n  return value;\n}"}
 ```
 
-把命令中的 `/path/to/dataset` 换成存放 `test.jsonl` 的目录。`--idx 1` 选中上面的样本。
+把命令中的 `/path/to/dataset` 换成存放 `test.jsonl` 的目录。`--idx 1` 选中上面的样本。课程数据可以放在项目根目录的 `data/` 下，Git 会忽略整个目录。运行时使用 `--dataset-dir ./data`，并从课程的 `test.jsonl` 中选取样本编号。
 
 ```sh
 mise exec -- pnpm --silent audit:one --dataset-dir /path/to/dataset --idx 1
