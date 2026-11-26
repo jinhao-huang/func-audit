@@ -1,10 +1,14 @@
-import { getReport } from "../workspace.server";
+import { predictions } from "../../src/reports.ts";
+import { getRun } from "../workspace.server";
 import type { Route } from "./+types/result";
 
 export function loader({ params }: Route.LoaderArgs) {
-  const { report } = getReport(params.id);
-  if (report.status !== "completed") throw new Response("This report has no completed verdict.", { status: 409 });
-  return new Response(JSON.stringify({ idx: report.idx, prediction: report.prediction }) + "\n", {
-    headers: { "Content-Type": "application/x-ndjson", "Content-Disposition": 'attachment; filename="result.jsonl"' },
-  });
+  const run = getRun(params.id);
+  try {
+    return new Response(predictions(run), { headers: {
+      "Content-Type": "application/x-ndjson", "Content-Disposition": 'attachment; filename="result.jsonl"',
+    } });
+  } catch (error) {
+    throw new Response((error as Error).message, { status: 409 });
+  }
 }

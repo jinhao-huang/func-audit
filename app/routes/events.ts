@@ -1,11 +1,11 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { recoverWorkers, reportUpdates } from "../../src/reports.ts";
-import { openWorkspace, reportId } from "../workspace.server";
+import { openWorkspace, routeId } from "../workspace.server";
 import type { Route } from "./+types/events";
 
 export function loader({ params, request }: Route.LoaderArgs) {
   openWorkspace();
-  const id = reportId(params.id);
+  const id = routeId(params.id);
   const cursor = request.headers.get("Last-Event-ID") ?? new URL(request.url).searchParams.get("after") ?? "0";
   let after = Number(cursor);
   if (!/^\d+$/.test(cursor) || !Number.isSafeInteger(after)) throw new Response("Invalid event cursor.", { status: 400 });

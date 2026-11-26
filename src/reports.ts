@@ -1,15 +1,17 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import type { Sample } from "./samples.ts";
 import type { reviewFunction } from "./review.ts";
 import type { SnapshotMetadata } from "./snapshot.ts";
 import type { Lookup } from "./source-tools.ts";
 import type { CaseSearch } from "./cases.ts";
 
 export type CaseSearchRecord = CaseSearch | { query: string; error: string };
-export type AuditContext = { snapshot?: SnapshotMetadata; lookups?: Lookup[]; caseSearches?: CaseSearchRecord[] };
+type AuditContext = { snapshot?: SnapshotMetadata; lookups?: Lookup[]; caseSearches?: CaseSearchRecord[] };
 export type Result = Awaited<ReturnType<typeof reviewFunction>>;
 export type ReportStatus = "started" | "completed" | "failed";
-export type Summary = { id: number; idx: number; model: string; startedAt: string; status: ReportStatus; target: number | null; prediction: number | null };
+export type Summary = { id: number; runId: number; idx: number; model: string; startedAt: string; status: ReportStatus; target: number | null; prediction: number | null };
 type SavedReport = Summary & { source: string; reason: string | null; error: string | null; evidence: Result["evidence"] | null };
 export type AuditEvent =
   | { kind: "accepted"; ownerPid: number }
@@ -20,59 +22,49 @@ export type AuditEvent =
   | { kind: "cases"; callId: string; search: CaseSearchRecord };
 export type Entry = { seq: number; event: AuditEvent };
 
-const databasePath = ".func-audit.sqlite";
+const databasePath = "data/results/runs.sqlite";
 
 function open(readOnly = false) {
   return new DatabaseSync(databasePath, { readOnly, timeout: 5000 });
 }
 
 export function initializeReports() {
+  mkdirSync(dirname(databasePath), { recursive: true });
   using db = open();
   db.exec(`
     PRAGMA journal_mode=WAL;
     BEGIN IMMEDIATE;
+    CREATE TABLE IF NOT EXISTS runs (id INTEGER PRIMARY KEY, pair INTEGER);
     CREATE TABLE IF NOT EXISTS reports (
-      id INTEGER PRIMARY KEY, idx INTEGER NOT NULL, source TEXT NOT NULL, model TEXT NOT NULL,
+      id INTEGER PRIMARY KEY, runId INTEGER NOT NULL REFERENCES runs(id), idx INTEGER NOT NULL, source TEXT NOT NULL, model TEXT NOT NULL,
       startedAt TEXT NOT NULL, status TEXT NOT NULL, target INTEGER, prediction INTEGER, reason TEXT, evidence TEXT, error TEXT
     );
     CREATE TABLE IF NOT EXISTS report_events (
       seq INTEGER PRIMARY KEY, reportId INTEGER NOT NULL REFERENCES reports(id), event TEXT NOT NULL
     );
+    CREATE INDEX IF NOT EXISTS reports_by_run ON reports(runId);
     CREATE INDEX IF NOT EXISTS report_events_by_report ON report_events(reportId, seq)
   `);
-  if (!db.prepare("SELECT 1 FROM pragma_table_info('reports') WHERE name = 'target'").get()) {
-    db.exec("ALTER TABLE reports ADD COLUMN target INTEGER");
-    const dataset = "data/test.jsonl";
-    if (existsSync(dataset)) {
-      const match = db.prepare("UPDATE reports SET target = ? WHERE idx = ? AND source = ?");
-      for (const line of readFileSync(dataset, "utf8").split(/\r?\n/)) {
-        if (!line.trim()) continue;
-        let sample;
-        try {
-          sample = JSON.parse(line);
-        } catch {
-          continue;
-        }
-        if ((sample?.target === 0 || sample?.target === 1) && Number.isSafeInteger(sample.idx) && typeof sample.func === "string") {
-          match.run(sample.target, sample.idx, sample.func);
-        }
-      }
-    }
-  }
   db.exec("COMMIT");
 }
 
-export function startReport(idx: number, source: string, model: string, target: number | null = null) {
+export function startRun(pair: number | null, samples: Sample[], model: string) {
   initializeReports();
   using db = open();
   db.exec("BEGIN IMMEDIATE");
-  const row = db.prepare(`
-    INSERT INTO reports (idx, source, model, startedAt, target, status) VALUES (?, ?, ?, ?, ?, 'started')
-  `).run(idx, source, model, new Date().toISOString(), target);
-  const id = Number(row.lastInsertRowid);
-  insertEvent(db, id, { kind: "accepted", ownerPid: process.pid });
+  const id = Number(db.prepare("INSERT INTO runs (pair) VALUES (?)").run(pair).lastInsertRowid);
+  const insert = db.prepare(`
+    INSERT INTO reports (runId, idx, source, model, startedAt, target, status) VALUES (?, ?, ?, ?, ?, ?, 'started')
+  `);
+  const startedAt = new Date().toISOString();
+  const jobs = samples.map(sample => {
+    const row = insert.run(id, sample.idx, sample.func, model, startedAt, sample.target ?? null);
+    const reportId = Number(row.lastInsertRowid);
+    insertEvent(db, reportId, { kind: "accepted", ownerPid: process.pid });
+    return { id: reportId, sample };
+  });
   db.exec("COMMIT");
-  return id;
+  return { id, jobs };
 }
 
 function insertEvent(db: DatabaseSync, id: number, event: AuditEvent) {
@@ -115,13 +107,48 @@ export function recoverWorkers(reportId?: number) {
   }
 }
 
-export function listReports() {
-  using db = open();
-  return db.prepare(`
-    SELECT id, idx, model, startedAt, status, target, prediction,
-      status = 'started' AND EXISTS (SELECT 1 FROM report_events WHERE reportId = reports.id) AS live
-    FROM reports ORDER BY id DESC
-  `).all() as (Summary & { live: number })[];
+export type Run = { id: number; pair: number | null; reports: Summary[] };
+
+export function listRuns(id?: number): Run[] {
+  if (!existsSync(databasePath)) return [];
+  using db = open(true);
+  const rows = db.prepare(`
+    SELECT r.id, r.runId, r.idx, r.model, r.startedAt, r.status, r.target, r.prediction, runs.pair
+    FROM reports r JOIN runs ON runs.id = r.runId
+    ${id === undefined ? "" : "WHERE runs.id = ?"} ORDER BY runs.id DESC, r.id
+  `).all(...(id === undefined ? [] : [id])) as (Summary & { pair: number | null })[];
+  const runs = new Map<number, Run>();
+  for (const { pair, ...report } of rows) {
+    let run = runs.get(report.runId);
+    if (!run) {
+      run = { id: report.runId, pair, reports: [] };
+      runs.set(run.id, run);
+    }
+    run.reports.push(report);
+  }
+  return Array.from(runs.values());
+}
+
+function completedPair(run: Run) {
+  if (run.pair === null) throw new Error("Course scoring requires a pair run.");
+  if (run.reports.length !== 2 || run.reports.some(report => report.status !== "completed")) {
+    throw new Error(`Run ${run.id} needs two completed reports.`);
+  }
+  return run.reports;
+}
+
+export function score(run: Run) {
+  const [a, b] = completedPair(run);
+  if ([a, b].some(r => (r.target !== 0 && r.target !== 1) || (r.prediction !== 0 && r.prediction !== 1))
+      || a.target === b.target) {
+    throw new Error(`Run ${run.id} has invalid pair labels or predictions.`);
+  }
+  if (a.prediction === b.prediction) return a.prediction === 1 ? "P-V" : "P-B";
+  return a.prediction === a.target ? "P-C" : "P-R";
+}
+
+export function predictions(run: Run) {
+  return completedPair(run).map(({ idx, prediction }) => JSON.stringify({ idx, prediction })).join("\n") + "\n";
 }
 
 function entries(db: DatabaseSync, id: number, after: number): Entry[] {
@@ -144,20 +171,13 @@ export function reportDetail(id: number) {
   const row = db.prepare("SELECT * FROM reports WHERE id = ?").get(id);
   if (!row) return null;
   const report = { ...row, evidence: row.evidence && JSON.parse(String(row.evidence)) } as SavedReport;
-  const hasEvents = db.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'report_events'").get();
-  const history = hasEvents ? entries(db, id, 0) : [];
-  let legacy: AuditContext | undefined;
-  if (!history.length && db.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'report_context'").get()) {
-    const saved = db.prepare("SELECT context FROM report_context WHERE reportId = ?").get(id);
-    if (saved) legacy = JSON.parse(String(saved.context));
-  }
-  return { report, entries: history, legacy };
+  return { report, entries: entries(db, id, 0) };
 }
 
 export function readReport(id: number) {
   const detail = reportDetail(id);
   if (!detail) throw new Error(`Report ${id} was not found.`);
-  const context: AuditContext = detail.legacy ?? {};
+  const context: AuditContext = {};
   for (const { event } of detail.entries) {
     if (event.kind === "prepare" && event.cases) context.caseSearches = [];
     if (event.kind === "review" && event.snapshot) {

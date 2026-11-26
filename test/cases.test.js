@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { searchCases } from "../src/cases.ts";
-import { auditOne } from "../src/audit-one.ts";
+import { reviewSample } from "../verification/audit-fixture.mjs";
 import { readReport } from "../src/reports.ts";
 
 function historical(cve, commit, func = "int copy_item(void);") {
@@ -43,13 +43,14 @@ test("Pi receives historical cases only through its own search", async (t) => {
     await rm(dir, { recursive: true, force: true });
   });
   const source = "int review(void) { return copy_item(); }";
-  await writeFile("test.jsonl", JSON.stringify({ idx: 4, func: source }));
-  await writeFile("knowledge.jsonl", JSON.stringify(historical("course-original", "other-repair")));
-  await writeFile("knowledge.eval.jsonl", JSON.stringify(historical("example-case", "private-repair")));
+  const sample = { idx: 4, func: source };
+  await mkdir("data/raw", { recursive: true });
+  await mkdir("data/prepared", { recursive: true });
+  await writeFile("data/raw/knowledge.jsonl", JSON.stringify(historical("course-original", "other-repair")));
+  await writeFile("data/prepared/knowledge.eval.jsonl", JSON.stringify(historical("example-case", "private-repair")));
   t.mock.property(process, "env", { ...process.env, FUNC_AUDIT_API_KEY: "fixture",
     FUNC_AUDIT_BASE_URL: "https://mock.invalid/v1", FUNC_AUDIT_MODEL: "fixture" });
-  let search, output;
-  t.mock.method(console, "log", (json) => { output = JSON.parse(json); });
+  let search;
   t.mock.method(globalThis, "fetch", async (input, init) => {
     const req = new Request(input, init);
     assert.equal(req.url, "https://mock.invalid/v1/chat/completions");
@@ -77,15 +78,15 @@ test("Pi receives historical cases only through its own search", async (t) => {
       headers: { "content-type": "text/event-stream" },
     });
   });
-  await auditOne(["--dataset-dir", dir, "--idx", "4"]);
+  const output = await reviewSample(sample);
   assert.deepEqual(output.context.caseSearches, [search]);
-  await rm("knowledge.eval.jsonl");
+  await rm("data/prepared/knowledge.eval.jsonl");
   const saved = readReport(output.id);
   assert.deepEqual(saved.context, output.context);
   assert.equal(saved.evidence[0].source, source);
 
-  await writeFile("knowledge.eval.jsonl", JSON.stringify({ func: "int item(void);" }));
-  await assert.rejects(auditOne(["--dataset-dir", dir, "--idx", "4"]), /Expected a CVE identifier/);
+  await writeFile("data/prepared/knowledge.eval.jsonl", JSON.stringify({ func: "int item(void);" }));
+  await assert.rejects(reviewSample(sample), /Expected a CVE identifier/);
   const failed = readReport(output.id + 1);
   assert.equal(failed.status, "failed");
   assert.deepEqual(failed.context.caseSearches, [

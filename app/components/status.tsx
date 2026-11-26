@@ -1,9 +1,9 @@
 import { Badge } from "./ui/badge";
 import type { Summary } from "../../src/reports.ts";
 
-export function Status({ report, live }: { report: Summary; live: boolean }) {
+export function Status({ report }: { report: Summary }) {
   if (report.status === "failed") return <Badge variant="destructive">Failed</Badge>;
-  if (report.status === "started") return <Badge variant="secondary">{live ? "Running" : "Unfinished"}</Badge>;
+  if (report.status === "started") return <Badge variant="secondary">Running</Badge>;
   if (report.target == null) return <Badge variant="outline">Ungraded</Badge>;
   if (report.prediction === report.target) return <Badge className="bg-teal-100 text-teal-950">Correct</Badge>;
   return <Badge className="bg-amber-100 text-amber-950">{report.prediction === 1 ? "False positive" : "False negative"}</Badge>;

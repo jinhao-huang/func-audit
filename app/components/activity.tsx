@@ -1,7 +1,7 @@
 import { BookOpenIcon, FileTextIcon, SearchIcon } from "lucide-react";
 import { CodeBlock, CodeBlockContent, CodeBlockHeader, CodeBlockTitle } from "./ui/code-block";
 import { Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger, TraceIcon, TraceLine, TraceTitle } from "./ui/trace";
-import type { AuditContext, CaseSearchRecord, Entry } from "../../src/reports.ts";
+import type { CaseSearchRecord, Entry } from "../../src/reports.ts";
 import type { Lookup } from "../../src/source-tools.ts";
 
 type Call = { name: string; args: object; output?: string; error?: boolean };
@@ -15,8 +15,7 @@ function caseResult(search: CaseSearchRecord): Call {
     output: "error" in search ? search.error : JSON.stringify(search.hits, null, 2), error: "error" in search };
 }
 
-function toolCalls(entries: Entry[], legacy?: AuditContext) {
-  if (legacy) return [...(legacy.lookups ?? []).map(lookupResult), ...(legacy.caseSearches ?? []).map(caseResult)];
+function toolCalls(entries: Entry[]) {
   const calls = new Map<string, Call>();
   for (const { event } of entries) {
     if (event.kind === "tool") calls.set(event.callId, { name: event.name, args: event.args });
@@ -26,10 +25,9 @@ function toolCalls(entries: Entry[], legacy?: AuditContext) {
   return Array.from(calls.values());
 }
 
-export function Activity({ entries, legacy, active }: { entries: Entry[]; legacy?: AuditContext; active: boolean }) {
-  const calls = toolCalls(entries, legacy);
+export function Activity({ entries, active }: { entries: Entry[]; active: boolean }) {
+  const calls = toolCalls(entries);
   return <section><h2>Tool activity <span className="count">{calls.length}</span></h2>
-    {legacy && calls.length > 0 && <p className="hint mt-2">This earlier report groups source lookups and case searches separately.</p>}
     {!calls.length && <p className="hint mt-3">No tool calls recorded.</p>}
     <Trace className="mt-4">{calls.map((call, i) => {
       const Icon = call.name === "search_cases" ? BookOpenIcon : call.name === "grep" ? SearchIcon : FileTextIcon;

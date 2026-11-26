@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
-import { useRevalidator } from "react-router";
-import { DownloadIcon } from "lucide-react";
+import { Link, useRevalidator } from "react-router";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Activity } from "@/components/activity";
 import { startedAt, Status } from "@/components/status";
@@ -14,12 +13,12 @@ import type { Route } from "./+types/report";
 export const meta = ({ params }: Route.MetaArgs) => [{ title: `Report #${params.id} · Function Audit` }];
 export function loader({ params }: Route.LoaderArgs) { return getReport(params.id); }
 
-export default function ReportRoute({ loaderData: { report, entries, legacy } }: Route.ComponentProps) {
+export default function ReportRoute({ loaderData: { report, entries } }: Route.ComponentProps) {
   const { revalidate } = useRevalidator();
   const [updates, setUpdates] = useState<Entry[]>([]);
   const [reconnecting, setReconnecting] = useState(false);
   const cursor = entries.at(-1)?.seq ?? 0;
-  const live = report.status === "started" && cursor > 0;
+  const live = report.status === "started";
   useEffect(() => {
     if (!live) return;
     const source = new EventSource(`/reports/${report.id}/events?after=${cursor}`);
@@ -35,7 +34,7 @@ export default function ReportRoute({ loaderData: { report, entries, legacy } }:
   const history = live ? entries.concat(updates.filter(entry => entry.seq > cursor)) : entries;
   const review = history.findLast(({ event }) => event.kind === "review")?.event;
   const prepare = history.findLast(({ event }) => event.kind === "prepare")?.event;
-  const snapshot = review?.kind === "review" ? review.snapshot : legacy?.snapshot;
+  const snapshot = review?.kind === "review" ? review.snapshot : undefined;
   const stage = review ? "Reviewing the function" : prepare?.kind === "prepare" && prepare.snapshot
     ? "Preparing the source snapshot" : "Starting the audit";
   return <>
@@ -44,8 +43,7 @@ export default function ReportRoute({ loaderData: { report, entries, legacy } }:
         <p className="hint mb-1">Sample {report.idx} · {startedAt(report.startedAt)}</p>
         <h1 className="text-2xl">Report #{report.id}</h1>
       </div>
-      {report.status === "completed" && <a href={`/reports/${report.id}/result.jsonl`} download
-        className={buttonVariants({ variant: "outline", size: "sm" })}><DownloadIcon />Download result.jsonl</a>}
+      <Link to={`/runs/${report.runId}`} className={buttonVariants({ variant: "outline", size: "sm" })}>Run #{report.runId}</Link>
     </header>
     <Tabs defaultValue="verdict" className="report-tabs min-w-0 gap-5">
       <div className="shrink-0 overflow-x-auto border-b pb-1">
@@ -56,12 +54,11 @@ export default function ReportRoute({ loaderData: { report, entries, legacy } }:
         </TabsList>
       </div>
       <TabsContent value="verdict" className="min-w-0 space-y-5">
-        <div className="flex items-center gap-3"><h2>Audit result</h2><Status report={report} live={live} /></div>
+        <div className="flex items-center gap-3"><h2>Audit result</h2><Status report={report} /></div>
         {live && <p role="status" className="flex items-center gap-3"><progress className="w-16" aria-label="Audit in progress" />
           {reconnecting ? "Reconnecting to the audit…" : stage}</p>}
-        {report.status === "started" && !live && <p className="hint">This earlier audit has no recorded outcome.</p>}
         <dl className="grid gap-x-8 gap-y-3 rounded-md border bg-muted/30 p-4 sm:grid-cols-3">
-          <div><dt className="hint">Execution</dt><dd>{report.status === "completed" ? "Completed" : report.status === "failed" ? "Failed" : live ? "Running" : "Unfinished"}</dd></div>
+          <div><dt className="hint">Execution</dt><dd>{report.status === "completed" ? "Completed" : report.status === "failed" ? "Failed" : "Running"}</dd></div>
           <div><dt className="hint">Model prediction</dt><dd>{report.prediction == null ? "No prediction" : report.prediction === 1 ? "Potential vulnerability" : "No finding"}</dd></div>
           <div><dt className="hint">Reference label</dt><dd>{report.target == null ? "Unlabeled" : report.target === 1 ? "Vulnerable" : "Benign"}</dd></div>
         </dl>
@@ -83,7 +80,7 @@ export default function ReportRoute({ loaderData: { report, entries, legacy } }:
           <CollapsibleContent><CodeBlock className="mt-3"><CodeBlockContent lineNumbers className="max-h-96">{report.source}</CodeBlockContent></CodeBlock></CollapsibleContent>
         </Collapsible>
       </TabsContent>
-      <TabsContent value="tools" className="min-w-0"><Activity entries={history} legacy={legacy} active={live} /></TabsContent>
+      <TabsContent value="tools" className="min-w-0"><Activity entries={history} active={live} /></TabsContent>
     </Tabs>
   </>;
 }

@@ -1,24 +1,25 @@
 import { data, redirect } from "react-router";
-import { findSample, parseSample } from "../../src/samples.ts";
-import { submitAudit } from "../workspace.server";
+import { loadPair, parseSample } from "../../src/samples.ts";
+import { submitRun } from "../workspace.server";
 import type { Route } from "./+types/submit";
 
 export async function action({ request }: Route.ActionArgs) {
   const form = await request.formData();
-  const idx = String(form.get("idx") ?? "").trim();
-  const json = String(form.get("sample") ?? "").trim();
-  let sample;
+  const mode = form.has("sample") ? "sample" : "pair";
+  let pair: number | null = null;
+  let samples;
   try {
-    if (json && idx) throw new Error("Enter either a dataset ID or a JSON sample.");
-    if (json) sample = parseSample(JSON.parse(json));
-    else {
-      if (!/^\d+$/.test(idx) || !Number.isSafeInteger(Number(idx))) throw new Error("Enter a sample ID or paste a JSON sample.");
-      sample = await findSample("data", Number(idx));
+    if (mode === "sample") {
+      samples = [parseSample(JSON.parse(String(form.get("sample"))))];
+    } else {
+      const value = String(form.get("pair") ?? "").trim();
+      pair = Number(value);
+      if (!/^\d+$/.test(value) || !Number.isSafeInteger(pair) || pair < 1) throw new Error("Enter a positive pair number.");
+      samples = await loadPair(pair);
     }
   } catch (error) {
-    const message = (error as NodeJS.ErrnoException).code === "ENOENT"
-      ? "Place test.jsonl in the data directory, or paste a JSON sample." : (error as Error).message;
-    return data({ error: message }, { status: 400 });
+    return data({ mode, error: (error as Error).message }, { status: 400 });
   }
-  return redirect(`/reports/${submitAudit(sample)}`, 303);
+  const run = submitRun(pair, samples);
+  return redirect(pair === null ? `/reports/${run.jobs[0].id}` : `/runs/${run.id}`, 303);
 }

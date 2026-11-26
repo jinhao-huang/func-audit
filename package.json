@@ -3,8 +3,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "audit:one": "node src/audit-one.ts",
-    "report:show": "node src/report-show.ts",
     "check": "react-router typegen && tsc --noEmit",
     "test": "node --test",
     "dev": "react-router dev",

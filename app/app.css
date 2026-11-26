@@ -140,7 +140,7 @@
   .workspace { @apply grid h-full grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)] overflow-clip rounded-lg border bg-card md:grid-cols-[17rem_minmax(0,1fr)] md:grid-rows-1; }
   .tasks { @apply flex min-h-0 min-w-0 flex-col border-b bg-muted/40 md:border-r md:border-b-0; }
   .task-list { @apply flex gap-1 overflow-auto px-2 pb-3 md:flex-col; }
-  .task-link { @apply grid shrink-0 gap-1 rounded-md px-3 py-2 text-sm hover:bg-muted aria-[current=page]:bg-primary/10 aria-[current=page]:text-primary; }
+  .task-link { @apply grid shrink-0 gap-1 rounded-md px-3 py-2 text-sm hover:bg-muted aria-[current=page]:underline aria-[current=page]:bg-primary/10 aria-[current=page]:text-primary; }
 
   @media (min-height: 32rem) {
     .report-pane { @apply flex flex-col; }

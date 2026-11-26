@@ -3,45 +3,41 @@ import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
-import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import test from "node:test";
 
-test("submit, disconnect, replay tool events and download a persisted verdict", { timeout: 30000 }, async t => {
+test("submit a pair, replay tool events, download both predictions and inspect a partial retry", { timeout: 30000 }, async t => {
   const cwd = await mkdtemp(join(tmpdir(), "func-audit-web-"));
   t.after(() => rm(cwd, { recursive: true, force: true }));
   for (const path of ["src", "build"]) await symlink(resolve(path), join(cwd, path));
-  await mkdir(join(cwd, "data"));
-  await writeFile(join(cwd, "data", "knowledge.eval.jsonl"), JSON.stringify({ func: "int one();", cve: "CVE-2020-1234" }));
-  await writeFile(join(cwd, "data", "test.jsonl"), JSON.stringify({ idx: 11, func: "int two() { return 2; }", target: 0 }));
-  // An exited owner leaves a durable running record, as after a server interruption.
+  await mkdir(join(cwd, "data/raw"), { recursive: true });
+  const samples = [{ idx: 9, func: "int one() { return 1; }", target: 1 },
+    { idx: 11, func: "int two() { return 2; }", target: 0 }];
+  await writeFile(join(cwd, "data/raw/test.jsonl"), samples.map(row => JSON.stringify(row)).join("\n"));
+  execFileSync(process.execPath, ["src/cli.ts", "prepare"], { cwd });
+  await writeFile(join(cwd, "data/prepared/knowledge.eval.jsonl"), JSON.stringify({ func: "int one();", cve: "CVE-2020-1234" }));
   execFileSync(process.execPath, ["--input-type=module", "-e",
-    'import { startReport } from "./src/reports.ts"; startReport(10, "int zero();", "fixture");'], { cwd });
-  // Old reports can only inherit a label from the same sample and function.
-  const db = new DatabaseSync(join(cwd, ".func-audit.sqlite"));
-  db.exec(`
-    INSERT INTO reports (idx, source, model, startedAt, status, prediction)
-    VALUES (11, 'int two() { return 2; }', 'fixture', '2026-01-01', 'completed', 1),
-           (11, 'int unrelated();', 'fixture', '2026-01-01', 'completed', 0);
-    ALTER TABLE reports DROP COLUMN target;
-  `);
-  db.close();
+    'import { startRun } from "./src/reports.ts"; startRun(null, [{idx:10,func:"int zero();"}], "fixture");'], { cwd });
   const finish = Promise.withResolvers();
   const called = Promise.withResolvers();
-  let requests = 0;
-  const model = createServer(async (_req, res) => {
-    const first = ++requests === 1;
-    if (!first) {
+  let failSecond = false;
+  const model = createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const { messages } = JSON.parse(Buffer.concat(chunks));
+    const one = messages.find(message => message.role === "user").content[0].text.includes("one()");
+    const lookup = one && !messages.some(message => message.role === "tool");
+    if (one && !lookup) {
       called.resolve();
       await finish.promise;
     }
-    const delta = requests === 3 ? { content: "{}" } : first ? { tool_calls: [{ index: 0, id: "lookup", type: "function",
+    const delta = lookup ? { tool_calls: [{ index: 0, id: "lookup", type: "function",
       function: { name: "search_cases", arguments: '{"query":"one"}' } }] } : {
-      content: JSON.stringify({ prediction: 0, reason: "Returns one.", evidence: [{ startLine: 1, endLine: 1 }] }),
+      content: !one && failSecond ? "{}" : JSON.stringify({ prediction: 0, reason: "Returns a constant.", evidence: [{ startLine: 1, endLine: 1 }] }),
     };
-    const chunk = { choices: [{ index: 0, delta, finish_reason: first ? "tool_calls" : "stop" }] };
+    const chunk = { choices: [{ index: 0, delta, finish_reason: lookup ? "tool_calls" : "stop" }] };
     res.writeHead(200, { "content-type": "text/event-stream" });
     res.end(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`);
   });
@@ -60,21 +56,25 @@ test("submit, disconnect, replay tool events and download a persisted verdict", 
   const [startup] = await once(lines, "line");
   const base = startup.match(/http:\/\/127\.0\.0\.1:\d+/)?.[0];
   assert.ok(base, startup);
-  const submit = (body) => fetch(base + "/audits", { method: "POST", redirect: "manual",
+  const submit = (body) => fetch(base + "/runs", { method: "POST", redirect: "manual",
     headers: { origin: base }, body: new URLSearchParams(body) });
   const interrupted = await (await fetch(base + "/reports/1")).text();
   assert.match(interrupted, /audit process stopped before saving a result/);
-  assert.equal((await submit({ idx: "-1" })).status, 400);
-  assert.equal((await fetch(base, { redirect: "manual" })).headers.get("location"), "/reports/3");
-  assert.equal((await submit({ sample: JSON.stringify({ idx: 9, func: "int one();", target: 2 }) })).status, 400);
-  const migrated = await (await fetch(base + "/reports/2")).text();
-  assert.match(migrated, /False positive/);
-  assert.match(migrated, /<dd>Benign<\/dd>/);
-  assert.match(await (await fetch(base + "/reports/3")).text(), /<dd>Unlabeled<\/dd>/);
-  const response = await submit({ sample: JSON.stringify({ idx: 9, func: "int one() { return 1; }", target: 1 }) });
+  assert.equal((await submit({ pair: "-1" })).status, 400);
+  const missingPair = await submit({ pair: "2" });
+  assert.equal(missingPair.status, 400);
+  assert.equal((await missingPair.json()).mode, "pair");
+  const invalidSample = await submit({ sample: JSON.stringify({ idx: 9, func: "int one();", target: 2 }) });
+  assert.equal(invalidSample.status, 400);
+  assert.equal((await invalidSample.json()).mode, "sample");
+  const response = await submit({ pair: "1" });
   assert.equal(response.status, 303);
-  const report = base + response.headers.get("location");
-  assert.equal((await fetch(report + "/result.jsonl")).status, 409);
+  assert.equal(response.headers.get("location"), "/runs/2");
+  const run = base + "/runs/2";
+  const report = base + "/reports/2";
+  assert.equal((await fetch(base, { redirect: "manual" })).headers.get("location"), "/runs/2");
+  assert.match(await (await fetch(run)).text(), /Not scored/);
+  assert.equal((await fetch(run + "/result.jsonl")).status, 409);
   const disconnect = new AbortController();
   const stream = await fetch(report + "/events", { signal: disconnect.signal });
   const first = new TextDecoder().decode((await stream.body.getReader().read()).value);
@@ -90,19 +90,27 @@ test("submit, disconnect, replay tool events and download a persisted verdict", 
   assert.ok(entries.some(({ event }) => event.kind === "cases" && event.search.hits[0].cve === "CVE-2020-1234"));
   assert.match(replay, /event: finished\ndata: completed/);
   const html = await (await fetch(report)).text();
-  assert.match(html, /Returns one\./);
+  assert.match(html, /Returns a constant\./);
   assert.match(html, /False negative/);
   assert.match(html, /aria-label="Report sections"/);
-  assert.equal(await (await fetch(report + "/result.jsonl")).text(), '{"idx":9,"prediction":0}\n');
-  assert.equal(requests, 2);
-  const fromDataset = await submit({ idx: "11" });
-  assert.equal(fromDataset.status, 303);
-  const failedReport = base + fromDataset.headers.get("location");
-  assert.match(await (await fetch(failedReport + "/events")).text(), /event: finished\ndata: failed/);
-  assert.match(await (await fetch(failedReport)).text(), /Expected a binary prediction/);
+  await (await fetch(base + "/reports/3/events")).text();
+  assert.match(await (await fetch(run)).text(), /P-B · Both predicted benign/);
+  assert.equal(await (await fetch(run + "/result.jsonl")).text(), '{"idx":9,"prediction":0}\n{"idx":11,"prediction":0}\n');
+  failSecond = true;
+  assert.equal((await submit({ pair: "1" })).headers.get("location"), "/runs/3");
+  await Promise.all([4, 5].map(async id => (await fetch(base + `/reports/${id}/events`)).text()));
+  const partial = await (await fetch(base + "/runs/3")).text();
+  assert.match(partial, /1 failed/);
+  assert.match(partial, /Not scored/);
+  assert.match(await (await fetch(base + "/reports/5")).text(), /Expected a binary prediction/);
+  assert.equal((await fetch(base + "/runs/3/result.jsonl")).status, 409);
+  const solo = await submit({ sample: JSON.stringify(samples[0]) });
+  assert.equal(solo.headers.get("location"), "/reports/6");
+  assert.match(await (await fetch(base + "/reports/6/events")).text(), /event: finished\ndata: completed/);
+  assert.equal((await fetch(base + "/runs/4/result.jsonl")).status, 409);
 
   const owner = spawn(process.execPath, ["--input-type=module", "-e",
-    'import { startReport } from "./src/reports.ts"; console.log(startReport(12, "int three();", "fixture")); process.stdin.resume();'],
+    'import { startRun } from "./src/reports.ts"; console.log(startRun(null, [{idx:12,func:"int three();"}], "fixture").jobs[0].id); process.stdin.resume();'],
     { cwd, stdio: ["pipe", "pipe", "inherit"] });
   t.after(() => owner.kill());
   const [id] = await once(createInterface({ input: owner.stdout }), "line");

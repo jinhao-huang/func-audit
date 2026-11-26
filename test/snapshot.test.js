@@ -8,7 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { promisify } from "node:util";
 import { gzipSync } from "node:zlib";
-import { auditOne } from "../src/audit-one.ts";
+import { reviewSample } from "../verification/audit-fixture.mjs";
 import { readReport } from "../src/reports.ts";
 import { prepareSnapshot } from "../src/snapshot.ts";
 import { sourceTools } from "../src/source-tools.ts";
@@ -79,13 +79,14 @@ test("Pi uses the selected snapshot and saved evidence survives its removal", as
   const commit = "a".repeat(40);
   const parent = "b".repeat(40);
   const link = `https://github.com/example/demo/commit/${commit}`;
-  await writeFile("test.jsonl", JSON.stringify({ idx: 7, func, target: 1, commit_url: link }));
+  const sample = { idx: 7, func, target: 1, commit_url: link };
   t.mock.property(process, "env", {
     ...process.env, FUNC_AUDIT_API_KEY: "fixture", FUNC_AUDIT_BASE_URL: "https://model.invalid/v1",
     FUNC_AUDIT_MODEL: "fixture",
   });
   let withCases = true;
-  await writeFile("knowledge.eval.jsonl", JSON.stringify({ func: "void copy_value(int);", cve: "CVE-2020-1234", cve_desc: "A helper example." }));
+  await mkdir("data/prepared", { recursive: true });
+  await writeFile("data/prepared/knowledge.eval.jsonl", JSON.stringify({ func: "void copy_value(int);", cve: "CVE-2020-1234", cve_desc: "A helper example." }));
   let requests = [];
   let rounds = 0;
   let grepResult;
@@ -120,17 +121,15 @@ test("Pi uses the selected snapshot and saved evidence survives its removal", as
       headers: { "content-type": "text/event-stream" },
     });
   });
-  let output;
-  t.mock.method(console, "log", (json) => { output = JSON.parse(json); });
-  const run = () => auditOne(["--dataset-dir", dir, "--idx", "7"]);
-  await run();
+  const run = () => reviewSample(sample);
+  const output = await run();
   assert.equal(rounds, 3);
   assert.equal(requests[0], `https://api.github.com/repos/example/demo/git/commits/${commit}`);
   assert.equal(requests[1], `https://codeload.github.com/example/demo/tar.gz/${parent}`);
   const saved = readReport(output.id);
   assert.deepEqual(saved.context, output.context);
   assert.deepEqual(saved.context.caseSearches, []);
-  assert.equal(existsSync("knowledge.eval.jsonl.sqlite"), false);
+  assert.equal(existsSync("data/prepared/knowledge.eval.jsonl.sqlite"), false);
   assert.deepEqual(saved.context.snapshot, {
     repository: "example/demo", revision: parent, path: "src/main.c", startLine: 2, endLine: 4,
   });
@@ -138,8 +137,8 @@ test("Pi uses the selected snapshot and saved evidence survives its removal", as
   assert.deepEqual(saved.evidence, [{ path: "src/helper.c", startLine: 2, endLine: 2, source: "  return x;" }]);
 
   withCases = false;
-  await rename("knowledge.eval.jsonl", "knowledge.jsonl");
-  await writeFile("test.jsonl", JSON.stringify({ idx: 7, func, target: 0, commit_url: link }));
+  await rm("data/prepared/knowledge.eval.jsonl");
+  sample.target = 0;
   requests = [];
   rounds = 0;
   citationEnd = 3;
@@ -149,7 +148,7 @@ test("Pi uses the selected snapshot and saved evidence survives its removal", as
   assert.deepEqual(failedLookups, [{ ...saved.context.lookups[0], result: grepResult }, saved.context.lookups[1]]);
   await assert.rejects(prepareSnapshot(link, 0, "int missing(void);"), /not found/);
 
-  const db = new DatabaseSync(".func-audit.sqlite");
+  const db = new DatabaseSync("data/results/runs.sqlite");
   try {
     db.exec(`CREATE TRIGGER reject_read BEFORE INSERT ON report_events
       WHEN json_extract(NEW.event, '$.lookup.tool') = 'read'

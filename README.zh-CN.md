@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-func-audit 用于检查本地数据集中的 C 或 C++ 函数。可以使用本地工作台或 CLI。两者都会把选定的函数、检索到的历史案例和按需读取的源码片段发给项目配置的模型，并保存审计结论、判断理由和引用的源码。
+func-audit 按对评测课程数据集中的 C 或 C++ 函数。每个函数有独立的模型会话和审计报告，两份预测按课程规则一起评分。工作台和命令行都可以提交评测。
 
 ## 配置运行环境
 
@@ -25,33 +25,34 @@ FUNC_AUDIT_BASE_URL = "https://gateway.example/v1"
 FUNC_AUDIT_MODEL = "team/custom-deployment"
 ```
 
-## 打开审计工作台
+## 评测一对课程样本
 
-在仓库根目录运行以下命令，然后打开终端显示的本地地址。
+把课程测试集放在 `data/raw/test.jsonl`。课程原版脚本 `evaluation.py` 可以放在同一目录供查阅。`data/prepared/` 存放评测用的输入，`data/results/` 存放审计结果。Git 忽略整个 `data/` 目录。
 
-```sh
-mise exec -- pnpm dev
-```
-
-点击 **New audit**，输入 `data/test.jsonl` 中的样本编号，或粘贴一条含 `idx` 和 `func` 的 JSON 样本，再点击 **Start audit**。样本可以带上 `target`（`1` 表示有漏洞，`0` 表示无漏洞），供工作台判断模型是否判对。模型看不到这个标签。
-
-从任务列表选择一份报告，在 **Verdict** 查看判断结果和理由，在 **Evidence** 核对源码，在 **Tools** 展开调用参数和返回值。服务运行期间可以关闭页面，稍后从任务列表重新打开。审计完成后，点击 **Download result.jsonl** 可下载供课程脚本评分的结果。工作台和 CLI 共用同一个报告库。如需运行生产构建，在仓库根目录依次执行 `mise exec -- pnpm build` 和 `mise exec -- pnpm start`。
-
-## 检查一个函数
-
-CLI 从 `test.jsonl` 读取数据，每行一个 JSON 对象。`idx` 是非负整数，`func` 是包含函数源码的非空字符串。要试跑一次，可以将下面这行保存为 `test.jsonl`。
-
-```json
-{"idx":1,"func":"int identity(int value) {\n  return value;\n}"}
-```
-
-把命令中的 `/path/to/dataset` 换成存放 `test.jsonl` 的目录。`--idx 1` 选中上面的样本。课程数据可以放在项目根目录的 `data/` 下，Git 会忽略整个目录。运行时使用 `--dataset-dir ./data`，并从课程的 `test.jsonl` 中选取样本编号。
+首次使用时先生成配对清单。更换数据集或调整记录顺序后，需要重新生成清单。
 
 ```sh
-mise exec -- pnpm --silent audit:one --dataset-dir /path/to/dataset --idx 1
+mise run prepare
+mise run audit 1
 ```
 
-输出的 JSON 中，`id` 是本次审计的报告编号，`idx` 是数据集中的样本编号，`model` 是所用模型。`prediction` 为 `1` 表示模型发现了潜在漏洞，为 `0` 表示模型在这个函数中未发现漏洞。`reason` 给出判断理由。`evidence` 中的每条记录都包含源码片段 `source` 及其起止行号 `startLine` 和 `endLine`。引用不带文件路径时，行号从函数的第 1 行算起，包含首尾两行。要保存 JSON，在命令末尾加上 `> report.json`。
+`prepare` 按课程规则校验相邻记录，将每对样本的两个编号写成 `data/prepared/pairs.jsonl` 中的一行。`audit 1` 选中第 1 对，分别启动两次独立审计。每个会话只接收自己的函数、按需读取的源码和检索到的案例。配对关系和参考标签由宿主管理。
+
+命令输出本次运行的 `id` 和两份报告的摘要。重跑同一对会得到新的运行号。如果一侧失败，命令会以非零状态退出，错误信息里有运行号，两份报告仍可查看。假设这次的运行号是 `3`，可以这样查看、评分和导出：
+
+```sh
+mise run report 3
+mise run score 3
+mise run export 3 > data/results/predictions.jsonl
+```
+
+两份报告都完成后，项目按课程规则，用本次保存的标签和预测计算成绩。**P-C** 表示两侧均判对，**P-R** 表示两侧均判错，**P-V** 表示都判为有漏洞，**P-B** 表示都判为无漏洞。导出文件每行包含一条样本的 `idx` 和 `prediction`。工作台和命令行共用本地数据库 `data/results/runs.sqlite`。
+
+## 打开工作台
+
+运行 `mise run dev`，打开终端显示的本地地址。选择 **New audit → Course pair**，输入课程对号，点击 **Start audit**。点击左侧的一次运行可查看完成进度和课程成绩，展开后可以选择其中任一报告。**Verdict** 显示判断和理由，**Evidence** 显示引用的源码，**Tools** 可以展开查看调用参数和返回值。服务运行期间可关闭页面，稍后再打开。
+
+临时检查一个函数时，选择 **Single function**，粘贴一条 JSON，例如 `{"idx":1,"func":"int one() { return 1; }"}`。可选的 `target` 取值为 0 或 1，用于核对这份报告的判断。如需运行生产构建，在仓库根目录依次执行 `mise exec -- pnpm build` 和 `mise exec -- pnpm start`。
 
 ## 结合仓库源码审计
 
@@ -61,24 +62,14 @@ Pi 用 `grep(pattern)` 搜索整个快照，传入可选的 `path` 可将范围�
 
 ## 使用历史案例
 
-把评测知识库 `knowledge.eval.jsonl` 放在 `test.jsonl` 同一目录，照常运行审计命令即可。对于含 7,578 条记录的课程原版，先在数据集目录中运行一次下面的命令。原库第 3643、3644 行与测试样本 187732 来自同一修复提交，生成副本时跳过这两行。
+运行 `mise run prepare` 后，在仓库根目录执行下面的命令，生成评测用的知识库。这条命令适用于含 7,578 条记录的课程原版。原库第 3643、3644 行与测试样本 187732 来自同一修复提交，生成副本时跳过这两行。
 
 ```sh
-awk 'NR != 3643 && NR != 3644' knowledge.jsonl > knowledge.eval.jsonl
+awk 'NR != 3643 && NR != 3644' data/raw/knowledge.jsonl > data/prepared/knowledge.eval.jsonl
 ```
 
-首次调用 `search_cases` 时会在数据集目录中创建 SQLite FTS5 索引 `knowledge.eval.jsonl.sqlite`，因此目录需要可写。后续审计复用索引，知识库文件大小或修改时间变化时会自动重建。目录里没有评测副本时，CLI 会跳过案例检索。
+首次调用 `search_cases` 时会在 `data/prepared/` 中创建 SQLite FTS5 索引 `knowledge.eval.jsonl.sqlite`，因此目录需要可写。后续审计复用索引，知识库文件大小或修改时间变化时会自动重建。目录里没有评测副本时，CLI 会跳过案例检索。
 
 Pi 读到需要参考历史案例的代码时，可以调用 `search_cases(query)`，用 API 名称、简短的英文描述或 CWE 编号查询。检索范围包括历史函数、漏洞描述、提交说明及 CVE、CWE 编号。结果按 BM25 排序，每个 CVE 只保留排名最高的一条，每次最多返回三个不同 CVE 的案例。
 
 报告的 `context.caseSearches` 按执行顺序保存 Pi 的查询，列表为空表示 Pi 没有调用检索工具。查询失败时，`error` 记录失败原因。每个命中都附有从 1 开始的评测副本行号、CVE、CWE、描述和源码摘录。`hits` 为空表示这次没有找到符合条件的案例。历史案例供分析时参考，报告中的证据仍须引用当前函数或快照源码。
-
-## 按 ID 查看报告
-
-每次审计都会在项目根目录的 `.func-audit.sqlite` 中生成一条独立记录。把下面命令里的 `1` 换成 JSON 结果中的 `id`，即可从本地数据库读取报告。如果创建记录后审计失败，可以从错误信息里找到 ID。在交互终端运行时，审计一开始就能看到这个 ID。
-
-```sh
-mise exec -- pnpm --silent report:show --id 1
-```
-
-保存的 JSON 记录包含开始时间、函数源码、模型和状态。`completed` 表示审计完成，可以查看判断结果和引用的证据。`failed` 表示审计失败，记录中会给出错误原因，预测值为 `null`。如果审计进程在保存结果前退出，工作台会在下次检查任务状态时将报告标为失败。

@@ -14,3 +14,32 @@ else
 fi
 pnpm install --frozen-lockfile
 '''
+
+[tasks.dev]
+description = "Open the local development server"
+run = "pnpm dev"
+
+[tasks.prepare]
+description = "Prepare the course pair manifest"
+raw_args = true
+run = "node src/cli.ts prepare"
+
+[tasks.audit]
+description = "Audit both samples in a course pair"
+raw_args = true
+run = "node src/cli.ts audit"
+
+[tasks.report]
+description = "Show the reports from a run"
+raw_args = true
+run = "node src/cli.ts report"
+
+[tasks.score]
+description = "Grade a completed pair run"
+raw_args = true
+run = "node src/cli.ts score"
+
+[tasks.export]
+description = "Export predictions from a completed pair run"
+raw_args = true
+run = "node src/cli.ts export"
