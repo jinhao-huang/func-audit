@@ -2,6 +2,9 @@
 node = "24.18.1"
 pnpm = "11.20.0"
 ripgrep = "15.1.0"
+"conda:clang-tools" = "23.1.4"
+"github:netmute/ctags-lsp" = "0.11.0"
+"conda:universal-ctags" = "6.2.20261011.0"
 
 [tasks.setup]
 description = "Create local API settings and install locked dependencies"

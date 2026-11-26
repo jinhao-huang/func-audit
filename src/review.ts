@@ -87,15 +87,16 @@ export async function reviewFunction(source: string, snapshot?: {
   function startTool(id: string, name: string, args: object) {
     try { onStart?.(id, name, args); } catch (cause) { abortReview("Could not save tool call", cause); }
   }
+  await using sources = snapshot ? sourceTools(snapshot.root, (lookup, callId) => {
+    try {
+      snapshot.onLookup(lookup, callId);
+    } catch (cause) {
+      abortReview("Could not save snapshot lookup", cause);
+    }
+    lookups.push(lookup);
+  }, startTool) : undefined;
   const tools = [
-    ...(snapshot ? sourceTools(snapshot.root, (lookup, callId) => {
-      try {
-        snapshot.onLookup(lookup, callId);
-      } catch (cause) {
-        abortReview("Could not save snapshot lookup", cause);
-      }
-      lookups.push(lookup);
-    }, startTool) : []),
+    ...(sources?.tools ?? []),
     ...(searchCases ? [defineTool({
       name: "search_cases", label: "Search historical cases",
       description: "Look up historical maintenance cases by identifiers, APIs, or short English descriptions.",
@@ -112,7 +113,7 @@ export async function reviewFunction(source: string, snapshot?: {
     })] : []),
   ];
   const guidance = snapshot
-    ? "Use grep or read when the supplied function needs context. For evidence from read, include "
+    ? "Use grep, lsp or read when the supplied function needs context. For evidence from read, include "
       + "the requested path and inclusive file line numbers. For the supplied function, omit path "
       + "and use the numbered function lines."
     : "Cite the numbered lines of the supplied function.";
