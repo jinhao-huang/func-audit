@@ -2,11 +2,21 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 const exec = promisify(execFile);
 const sha = /^[0-9a-f]{40}$/;
+
+export async function snapshotPath(root: string, input: string) {
+  if (!input || isAbsolute(input) || input.split(sep).includes("..")) {
+    throw new Error("Use a path relative to the snapshot root.");
+  }
+  const path = await realpath(resolve(root, input)).catch(() => { throw new Error("Path not found in the snapshot."); });
+  const name = relative(root, path);
+  if (name === ".." || name.startsWith(`..${sep}`)) throw new Error("Path is outside the snapshot.");
+  return name || ".";
+}
 
 function commitLocation(link: string) {
   const github = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/commit\/([0-9a-f]{40})\/?$/.exec(link);

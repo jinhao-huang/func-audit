@@ -1,29 +1,22 @@
 import { spawn } from "node:child_process";
-import { readFile, realpath, stat } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { readFile, stat } from "node:fs/promises";
+import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { snapshotPath } from "./snapshot.ts";
+import { snapshotLsp, lspParameters, type LspQuery } from "./lsp.ts";
 
 type Range = { path: string; startLine: number; endLine: number };
 type Search = { pattern: string; path?: string };
 export type Lookup = { tool: "read"; args: Range; result: string; error?: true }
-  | { tool: "grep"; args: Search; result: string; error?: true };
-
-async function snapshotPath(root: string, input: string) {
-  if (!input || isAbsolute(input) || input.split(sep).includes("..")) {
-    throw new Error("Use a path relative to the snapshot root.");
-  }
-  const path = await realpath(resolve(root, input)).catch(() => { throw new Error("Path not found in the snapshot."); });
-  const name = relative(root, path);
-  if (name === ".." || name.startsWith(`..${sep}`)) throw new Error("Path is outside the snapshot.");
-  return name || ".";
-}
+  | { tool: "grep"; args: Search; result: string; error?: true }
+  | { tool: "lsp"; args: LspQuery; result: string; error?: true };
 
 async function search(root: string, args: Search, signal?: AbortSignal) {
   const path = await snapshotPath(root, args.path ?? ".");
   const child = spawn("rg", [
-    "--no-config", "--hidden", "--no-ignore", "--json", "--", args.pattern, path,
+    "--no-config", "--encoding=none", "--hidden", "--no-ignore", "--json", "--", args.pattern, path,
   ], { cwd: root, signal, stdio: ["ignore", "pipe", "pipe"] });
   const done = new Promise<number | null>((res, rej) => {
     child.once("error", rej);
@@ -35,14 +28,19 @@ async function search(root: string, args: Search, signal?: AbortSignal) {
     for await (const row of createInterface({ input: child.stdout, crlfDelay: Infinity })) {
       const { type, data } = JSON.parse(row);
       if (type !== "match" || !data.path.text || !data.lines.text) continue;
-      if (matches.length === 50) {
-        matches.push("[More matches omitted. Narrow the pattern or path.]");
-        child.kill();
-        break;
-      }
       const file = data.path.text.replace(/^\.\//, "");
       const line = data.lines.text.replace(/\r?\n$/, "");
-      matches.push(`${file}:${data.line_number}: ${line.length > 500 ? line.slice(0, 500) + "…" : line}`);
+      const excerpt = line.length > 500 ? line.slice(0, 500) + "…" : line;
+      const bytes = Buffer.from(line);
+      for (const match of data.submatches) {
+        if (matches.length === 50) {
+          matches.push("[More matches omitted. Narrow the pattern or path.]");
+          child.kill();
+          return;
+        }
+        const column = bytes.toString("utf8", 0, match.start).length + 1;
+        matches.push(`${file}:${data.line_number}:${column}: ${excerpt}`);
+      }
     }
   };
   const [code] = await Promise.all([done, collect()]);
@@ -65,10 +63,11 @@ export function sourceTools(root: string, record: (lookup: Lookup, callId: strin
     record(lookup, callId);
     return { content: [{ type: "text" as const, text: lookup.result }], details: undefined };
   }
-  return [
+  const navigation = snapshotLsp(root);
+  const tools = [
     defineTool({
       name: "grep", label: "Search snapshot",
-      description: "Search for a regular expression. Omit path to search the whole snapshot, or specify a relative directory or file. Returns paths, line numbers and matching text.",
+      description: "Search for a regular expression. Omit path to search the whole snapshot, or specify a relative directory or file. Returns path:line:column for each match (one-based UTF-16 columns) and matching text.",
       parameters: Type.Object({ pattern: Type.String({ minLength: 1 }), path: Type.Optional(Type.String()) }),
       execute: async (id, args, signal) => run(id, { tool: "grep", args, result: "" }, () => search(root, args, signal)),
     }),
@@ -90,5 +89,12 @@ export function sourceTools(root: string, record: (lookup: Lookup, callId: strin
         return result;
       }),
     }),
+    defineTool({
+      name: "lsp", label: "Navigate snapshot",
+      description: "Look up a C/C++ symbol at a snapshot file position. Use the one-based line and UTF-16 column from grep. Definition fallback lists same-name candidates. Use read for cited source.",
+      parameters: lspParameters,
+      execute: async (id, args, signal) => run(id, { tool: "lsp", args, result: "" }, () => navigation.query(args, signal)),
+    }),
   ];
+  return { tools, [Symbol.asyncDispose]: () => navigation.dispose() };
 }

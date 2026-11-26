@@ -49,12 +49,13 @@ test("snapshot grep searches across files and respects directory and file scope"
   await writeFile(join(root, "main.c"), "int main(void) { return answer(); }\n");
   await symlink(tmpdir(), join(root, "outside"));
   const log = [];
-  const [grep, read] = sourceTools(root, (call) => log.push(call));
+  await using source = sourceTools(root, (call) => log.push(call));
+  const [grep, read] = source.tools;
   const search = async (path) => (await grep.execute("g", { pattern: "answer", path })).content[0].text;
   assert.match(await search(), /main.c:1:/);
   assert.match(await search(), /inc\/answer.h:1:/);
-  assert.equal(await search("inc/"), "inc/answer.h:1: int answer(void);");
-  assert.equal(await search("inc/answer.h"), "inc/answer.h:1: int answer(void);");
+  assert.equal(await search("inc/"), "inc/answer.h:1:5: int answer(void);");
+  assert.equal(await search("inc/answer.h"), "inc/answer.h:1:5: int answer(void);");
   assert.equal((await grep.execute("g", { pattern: "absent" })).content[0].text, "No matches found.");
   for (const path of ["../", "/etc", "outside"]) {
     await assert.rejects(search(path), /snapshot/);
@@ -98,12 +99,13 @@ test("Pi uses the selected snapshot and saved evidence survives its removal", as
     if (req.url.startsWith("https://codeload.github.com/")) return new Response(archive);
     assert.equal(req.url, "https://model.invalid/v1/chat/completions");
     const body = await req.json();
-    assert.deepEqual(body.tools.map((tool) => tool.function.name).sort(), withCases ? ["grep", "read", "search_cases"] : ["grep", "read"]);
+    assert.deepEqual(body.tools.map((tool) => tool.function.name).sort(), withCases ? ["grep", "lsp", "read", "search_cases"] : ["grep", "lsp", "read"]);
     const messages = JSON.stringify(body.messages);
     for (const hidden of [link, commit, parent, "commit_url", dir]) assert.ok(!messages.includes(hidden));
     assert.match(messages, /src\/main.c/);
     const calls = [
       ["grep", { pattern: "copy_value" }],
+      ["lsp", { operation: "hover", path: "src/helper.c", line: 1, column: 5 }],
       ["read", { path: "src/helper.c", startLine: 1, endLine: 2 }],
     ];
     const n = rounds++;
@@ -111,19 +113,20 @@ test("Pi uses the selected snapshot and saved evidence survives its removal", as
       grepResult = body.messages.findLast((message) => message.role === "tool").content;
       assert.match(grepResult, /src\/helper.c:1:/);
     }
-    if (n === 2) assert.match(messages, /return x;/);
-    const delta = n < 2 ? { tool_calls: [{ index: 0, id: "call" + n, type: "function",
+    if (n === 2) assert.match(messages, /clangd hover/);
+    if (n === 3) assert.match(messages, /return x;/);
+    const delta = n < calls.length ? { tool_calls: [{ index: 0, id: "call" + n, type: "function",
       function: { name: calls[n][0], arguments: JSON.stringify(calls[n][1]) } }] } :
       { content: JSON.stringify({ prediction: 0, reason: "The helper returns its input.",
         evidence: [{ path: "src/helper.c", startLine: 2, endLine: citationEnd }] }) };
-    const chunk = { choices: [{ index: 0, delta, finish_reason: n < 2 ? "tool_calls" : "stop" }] };
+    const chunk = { choices: [{ index: 0, delta, finish_reason: n < calls.length ? "tool_calls" : "stop" }] };
     return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, {
       headers: { "content-type": "text/event-stream" },
     });
   });
   const run = () => reviewSample(sample);
   const output = await run();
-  assert.equal(rounds, 3);
+  assert.equal(rounds, 4);
   assert.equal(requests[0], `https://api.github.com/repos/example/demo/git/commits/${commit}`);
   assert.equal(requests[1], `https://codeload.github.com/example/demo/tar.gz/${parent}`);
   const saved = readReport(output.id);
@@ -132,7 +135,8 @@ test("Pi uses the selected snapshot and saved evidence survives its removal", as
   assert.deepEqual(saved.context.snapshot, {
     repository: "example/demo", revision: parent, path: "src/main.c", startLine: 2, endLine: 4,
   });
-  assert.equal(saved.context.lookups[1].result, "int copy_value(int x) {\n  return x;");
+  assert.match(saved.context.lookups[1].result, /clangd hover/);
+  assert.equal(saved.context.lookups[2].result, "int copy_value(int x) {\n  return x;");
   assert.deepEqual(saved.evidence, [{ path: "src/helper.c", startLine: 2, endLine: 2, source: "  return x;" }]);
 
   withCases = false;
@@ -144,7 +148,7 @@ test("Pi uses the selected snapshot and saved evidence survives its removal", as
   await assert.rejects(run(), /must refer to lines returned by read/);
   assert.equal(requests[0], `https://codeload.github.com/example/demo/tar.gz/${commit}`);
   const failedLookups = readReport(output.id + 1).context.lookups;
-  assert.deepEqual(failedLookups, [{ ...saved.context.lookups[0], result: grepResult }, saved.context.lookups[1]]);
+  assert.deepEqual(failedLookups, [{ ...saved.context.lookups[0], result: grepResult }, ...saved.context.lookups.slice(1)]);
   await assert.rejects(prepareSnapshot(link, 0, "int missing(void);"), /not found/);
 
   const db = new DatabaseSync("data/results/runs.sqlite");
@@ -158,9 +162,9 @@ test("Pi uses the selected snapshot and saved evidence survives its removal", as
   rounds = 0;
   citationEnd = 2;
   await assert.rejects(run(), /Could not save snapshot lookup: simulated trace failure/);
-  assert.equal(rounds, 2);
+  assert.equal(rounds, 3);
   const failed = readReport(output.id + 2);
   assert.equal(failed.status, "failed");
   assert.equal(failed.evidence, null);
-  assert.deepEqual(failed.context.lookups, [{ ...saved.context.lookups[0], result: grepResult }]);
+  assert.deepEqual(failed.context.lookups, [{ ...saved.context.lookups[0], result: grepResult }, saved.context.lookups[1]]);
 });

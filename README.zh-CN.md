@@ -14,7 +14,7 @@ mise install
 mise run setup
 ```
 
-这些命令会安装项目指定版本的 Node.js、pnpm、ripgrep 和项目依赖。首次运行 `mise run setup` 会创建 `mise.local.toml`。Git 会忽略这个文件，再次运行 setup 也会保留已有配置。
+这些命令会安装项目指定版本的 Node.js、pnpm、ripgrep、clangd、ctags-lsp、Universal Ctags 和项目依赖。首次运行 `mise run setup` 会创建 `mise.local.toml`。Git 会忽略这个文件，再次运行 setup 也会保留已有配置。
 
 打开 `mise.local.toml`，在 `[env]` 下取消 `FUNC_AUDIT_API_KEY` 这一行的注释，填入项目的 API 密钥。也可以在 shell 中导出同名环境变量。默认 API 地址是 `https://api.deepseek.com`，默认模型是 `deepseek-flash`。
 
@@ -62,7 +62,9 @@ mise run export 3 > data/results/predictions.jsonl
 
 课程样本带有 `commit_url` 时，运行同一条命令即可从 GitHub 下载临时源码快照，并用 `tar` 解压。`target` 为 `1` 时取修复提交的唯一父版本，为 `0` 时取修复提交本身。CLI 会先在快照中定位函数。版本不可用、找不到函数或匹配到多处时，报告会记录失败原因。如果快照含有仅大小写不同的路径，请将 `TMPDIR` 设为区分大小写的卷上已有的目录。样本没有提交链接时，CLI 会跳过快照。
 
-Pi 用 `grep(pattern)` 搜索整个快照，传入可选的 `path` 可将范围缩小到目录或单个文件。需要看原文时，Pi 用 `read(path, startLine, endLine)` 读取指定行。引用仓库源码的证据带有相对路径 `path`，行号从文件开头算起。报告的 `context.snapshot` 记录版本和函数位置，`context.lookups` 保存工具参数、返回的原文或错误。列表为空表示本次没有执行仓库查询。模型看不到样本标签和修复提交链接。
+Pi 用 `grep(pattern)` 搜索整个快照，也可以传入相对路径 `path`，只查指定文件或目录。每处匹配的相对路径、行号和列号都可以直接传给 `lsp(operation, path, line, column)`。行号和列号都从 1 开始，列按 UTF-16 计算。clangd 支持查定义（`definition`）、查引用（`references`）、查看符号说明（`hover`）和查类型定义（`typeDefinition`）。Pi 可以查看在快照中有定义或声明的符号说明。定义查询有时会定位到头文件中的声明。如果 clangd 不可用或在快照中找不到定义，ctags-lsp 会列出同名候选，Pi 可以用 `read(path, startLine, endLine)` 核对原文。
+
+引用仓库源码的证据带有相对路径 `path`，行号从文件开头算起。报告的 `context.snapshot` 记录版本和函数位置，`context.lookups` 保存工具参数、返回的原文或错误。列表为空表示本次没有执行仓库查询。模型看不到样本标签和修复提交链接。
 
 ## 使用历史案例
 
