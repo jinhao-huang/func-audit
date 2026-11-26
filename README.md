@@ -2,9 +2,9 @@
 
 [简体中文](README.zh-CN.md)
 
-Review one C or C++ function from a local dataset for potential vulnerabilities. The CLI sends the function, retrieved historical cases, and any requested source excerpts to your configured model. It prints a JSON report with the verdict, reasoning, and cited lines.
+Review one C or C++ function from a local dataset for potential vulnerabilities. Use the local web workspace or the CLI. Both send the function, retrieved historical cases, and requested source excerpts to your configured model and save the verdict, reasoning, and cited lines.
 
-## Set up the CLI
+## Set up
 
 With mise installed, run these commands from the repository root:
 
@@ -24,6 +24,18 @@ To use another OpenAI-compatible endpoint, set these two entries under the same 
 FUNC_AUDIT_BASE_URL = "https://gateway.example/v1"
 FUNC_AUDIT_MODEL = "team/custom-deployment"
 ```
+
+## Open the audit workspace
+
+From the repository root, run:
+
+```sh
+mise exec -- pnpm dev
+```
+
+Open the local URL printed in the terminal. Choose **New audit**, enter a sample ID from `data/test.jsonl` or paste a JSON sample with `idx` and `func`, then choose **Start audit**. An optional `target` (`1` for vulnerable, `0` for benign) lets the workspace grade the prediction. The model never receives this label.
+
+Select a task to see its **Verdict**, cited **Evidence**, or **Tools**. Expand a tool call to inspect its arguments and output. You can close the tab while the server runs and reopen the report from the task list. **Download result.jsonl** exports a completed prediction for the course grader. The CLI and workspace share the same report database. To run the production build locally, use `mise exec -- pnpm build` followed by `mise exec -- pnpm start` from the repository root.
 
 ## Review a function
 
@@ -69,4 +81,4 @@ Each audit gets its own record in `.func-audit.sqlite` in the project root. To r
 mise exec -- pnpm --silent report:show --id 1
 ```
 
-The saved JSON record includes the start time, source, model, and status. A `completed` report includes the verdict and evidence. A `failed` report contains the error and a `null` prediction. If the process exits before it can record the outcome, the status remains `started`.
+The saved JSON record includes the start time, source, model, and status. A `completed` report includes the verdict and evidence. A `failed` report contains the error and a `null` prediction. If an audit process exits before saving a result, the workspace marks the report as failed when it next checks the task.

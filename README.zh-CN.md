@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-func-audit 用于检查本地数据集中的 C 或 C++ 函数。CLI 把选定的函数、检索到的历史案例和模型按需读取的源码片段发给你配置的模型。输出的 JSON 报告说明模型是否发现潜在漏洞，并给出判断理由和引用的源码。
+func-audit 用于检查本地数据集中的 C 或 C++ 函数。可以使用本地工作台或 CLI。两者都会把选定的函数、检索到的历史案例和按需读取的源码片段发给项目配置的模型，并保存审计结论、判断理由和引用的源码。
 
 ## 配置运行环境
 
@@ -24,6 +24,18 @@ mise run setup
 FUNC_AUDIT_BASE_URL = "https://gateway.example/v1"
 FUNC_AUDIT_MODEL = "team/custom-deployment"
 ```
+
+## 打开审计工作台
+
+在仓库根目录运行以下命令，然后打开终端显示的本地地址。
+
+```sh
+mise exec -- pnpm dev
+```
+
+点击 **New audit**，输入 `data/test.jsonl` 中的样本编号，或粘贴一条含 `idx` 和 `func` 的 JSON 样本，再点击 **Start audit**。样本可以带上 `target`（`1` 表示有漏洞，`0` 表示无漏洞），供工作台判断模型是否判对。模型看不到这个标签。
+
+从任务列表选择一份报告，在 **Verdict** 查看判断结果和理由，在 **Evidence** 核对源码，在 **Tools** 展开调用参数和返回值。服务运行期间可以关闭页面，稍后从任务列表重新打开。审计完成后，点击 **Download result.jsonl** 可下载供课程脚本评分的结果。工作台和 CLI 共用同一个报告库。如需运行生产构建，在仓库根目录依次执行 `mise exec -- pnpm build` 和 `mise exec -- pnpm start`。
 
 ## 检查一个函数
 
@@ -69,4 +81,4 @@ Pi 读到需要参考历史案例的代码时，可以调用 `search_cases(query
 mise exec -- pnpm --silent report:show --id 1
 ```
 
-保存的 JSON 记录包含开始时间、函数源码、模型和状态。`completed` 表示审计完成，可以查看判断结果和引用的证据。`failed` 表示审计失败，记录中会给出错误原因，预测值为 `null`。如果进程在写入结果前退出，状态会停留在 `started`。
+保存的 JSON 记录包含开始时间、函数源码、模型和状态。`completed` 表示审计完成，可以查看判断结果和引用的证据。`failed` 表示审计失败，记录中会给出错误原因，预测值为 `null`。如果审计进程在保存结果前退出，工作台会在下次检查任务状态时将报告标为失败。

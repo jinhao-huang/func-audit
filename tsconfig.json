@@ -1,13 +1,17 @@
 {
   "compilerOptions": {
     "target": "ES2024",
-    "module": "NodeNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
     "strict": true,
     "skipLibCheck": true,
     "erasableSyntaxOnly": true,
     "allowImportingTsExtensions": true,
     "noEmit": true,
-    "types": ["node"]
+    "types": ["node", "vite/client"],
+    "paths": { "@/*": ["./app/*"] },
+    "rootDirs": [".", "./.react-router/types"]
   },
-  "include": ["src"]
+  "include": ["src", "app", ".react-router/types", "*.config.ts"]
 }

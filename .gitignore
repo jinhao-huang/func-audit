@@ -5,3 +5,5 @@ node_modules/
 /.func-audit.sqlite*
 *.jsonl.sqlite*
 knowledge.eval.jsonl
+/build/
+/.react-router/
