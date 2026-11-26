@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -9,9 +9,33 @@ import test from "node:test";
 import { promisify } from "node:util";
 import { gzipSync } from "node:zlib";
 import { reviewSample } from "../verification/audit-fixture.mjs";
-import { readReport } from "../src/reports.ts";
+import { readReport, reportUpdates } from "../src/reports.ts";
 import { prepareSnapshot } from "../src/snapshot.ts";
 import { sourceTools } from "../src/source-tools.ts";
+
+test("a stalled archive reports received bytes and cancellation removes the partial snapshot", { timeout: 10000 }, async t => {
+  const dir = await mkdtemp(join(tmpdir(), "func-audit-download-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  t.mock.property(process, "env", { ...process.env, TMPDIR: dir });
+  const controller = new AbortController();
+  let closed = false;
+  t.mock.method(globalThis, "fetch", async (_url, { signal }) => {
+    assert.equal(signal, controller.signal);
+    return new Response(new ReadableStream({
+      start(stream) { stream.enqueue(new Uint8Array(2048)); },
+      cancel() { closed = true; },
+    }), { headers: { "content-length": "8192" } });
+  });
+  const progress = [];
+  const work = prepareSnapshot(`https://github.com/example/demo/commit/${"a".repeat(40)}`, 0, "int one();", event => {
+    progress.push(event);
+    if (event.bytes > 0) controller.abort();
+  }, controller.signal);
+  await assert.rejects(work, { name: "AbortError" });
+  assert.deepEqual(progress.at(-1), { kind: "download", bytes: 2048, total: 8192 });
+  assert.ok(closed);
+  assert.deepEqual(await readdir(dir), []);
+});
 
 test("case-distinct archive entries must survive extraction independently", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "func-audit-case-"));
@@ -126,6 +150,9 @@ test("Pi uses the selected snapshot and saved evidence survives its removal", as
   });
   const run = () => reviewSample(sample);
   const output = await run();
+  const stages = reportUpdates(output.id, 0).entries.map(({ event }) => event);
+  assert.deepEqual(stages.slice(0, 5).map(e => e.kind), ["prepare", "download", "extract", "locate", "review"]);
+  assert.deepEqual(stages[1], { kind: "download", bytes: archive.length });
   assert.equal(rounds, 4);
   assert.equal(requests[0], `https://api.github.com/repos/example/demo/git/commits/${commit}`);
   assert.equal(requests[1], `https://codeload.github.com/example/demo/tar.gz/${parent}`);

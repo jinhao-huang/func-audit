@@ -9,6 +9,7 @@ import {
 import { Type } from "typebox";
 import { caseSearchModes, type CaseQuery, type CaseSearch } from "./cases.ts";
 import { projectApi } from "./project-api.ts";
+import { coversCitation, type SourceRange } from "./evidence.ts";
 import { sourceTools, type Lookup } from "./source-tools.ts";
 import type { SnapshotMetadata } from "./snapshot.ts";
 
@@ -46,13 +47,12 @@ function parseReview(reply: string, lines: string[], lookups: Lookup[]) {
   if (!Array.isArray(value.evidence) || value.evidence.length === 0) {
     throw new Error("Expected at least one source citation.");
   }
-  const evidence: { path?: string; startLine: number; endLine: number; source: string }[] = value.evidence.map((range: { path?: string; startLine: number; endLine: number }) => {
+  const evidence: { path?: string; startLine: number; endLine: number; source: string }[] = value.evidence.map((range: SourceRange & { path?: string }) => {
     const { path, startLine, endLine } = range;
     let citedLines = lines;
     let first = 1;
     if (path !== undefined) {
-      const read = lookups.find((call) => call.tool === "read" && !call.error && call.args.path === path
-        && call.args.startLine <= startLine && call.args.endLine >= endLine);
+      const read = lookups.find((call) => coversCitation(call, range));
       if (read?.tool !== "read") throw new Error("Snapshot citation must refer to lines returned by read.");
       citedLines = read.result.split("\n");
       first = read.args.startLine;
@@ -73,7 +73,7 @@ export async function reviewFunction(source: string, snapshot?: {
   location: Pick<SnapshotMetadata, "path" | "startLine" | "endLine">;
   onLookup: (lookup: Lookup, callId: string) => void;
 }, searchCases?: (request: CaseQuery, callId: string) => Promise<CaseSearch>,
-  onStart?: (callId: string, name: string, args: object) => void) {
+  onStart?: (callId: string, name: string, args: object) => void, signal?: AbortSignal) {
   const { modelRuntime, model } = await projectApi();
   const lines = source.split(/\r?\n/);
   const numbered = lines.map((line, i) => `${i + 1} | ${line}`).join("\n");
@@ -133,12 +133,15 @@ export async function reviewFunction(source: string, snapshot?: {
     tools: tools.map((tool) => tool.name),
     customTools: tools,
   });
+  const abort = () => { void session.abort(); };
+  signal?.addEventListener("abort", abort, { once: true });
   try {
+    signal?.throwIfAborted();
     const location = snapshot?.location;
     const functionText = location
       ? `Function at ${location.path}, file lines ${location.startLine}–${location.endLine}.\n\n${numbered}`
       : numbered;
-    await session.prompt(functionText);
+    await session.prompt(functionText, { preflightResult: () => signal?.throwIfAborted() });
     if (traceFailure) throw traceFailure;
     const message = session.messages.findLast((entry) => entry.role === "assistant");
     if (message?.stopReason !== "stop") {
@@ -148,6 +151,7 @@ export async function reviewFunction(source: string, snapshot?: {
     if (!text) throw new Error("Pi returned an empty response.");
     return { model: `${message.provider}/${message.model}`, ...parseReview(text, lines, lookups) };
   } finally {
+    signal?.removeEventListener("abort", abort);
     session.dispose();
   }
 }

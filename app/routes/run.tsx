@@ -4,20 +4,23 @@ import { buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Status, startedAt } from "@/components/status";
+import { CancelAudit } from "@/components/cancel-audit";
 import { score, type Summary } from "../../src/reports.ts";
-import { getRun } from "../workspace.server";
+import { cancelAudit, getRun } from "../workspace.server";
 import type { Route } from "./+types/run";
+
+export function action({ request, params }: Route.ActionArgs) { return cancelAudit(request, "run", params.id); }
 
 export function loader({ params }: Route.LoaderArgs) {
   const run = getRun(params.id);
-  const counts = { queued: 0, running: 0, completed: 0, failed: 0 };
+  const counts = { queued: 0, running: 0, completed: 0, failed: 0, canceled: 0 };
   for (const report of run.reports) counts[report.status]++;
   return { run, counts, grades: run.pairs.length ? score(run) : null };
 }
 
 const labels = {
   "P-C": "Both correct", "P-V": "Both predicted vulnerable", "P-B": "Both predicted benign", "P-R": "Both reversed",
-  failed: "Execution failed", pending: "Awaiting results",
+  failed: "Execution failed", canceled: "Canceled", pending: "Awaiting results",
 };
 
 function ReportLink({ report }: { report: Summary }) {
@@ -29,23 +32,24 @@ function ReportLink({ report }: { report: Summary }) {
 
 export default function RunRoute({ loaderData: { run, counts, grades } }: Route.ComponentProps) {
   const reports = new Map(run.reports.map(report => [report.id, report]));
-  const finished = counts.completed + counts.failed;
+  const finished = counts.completed + counts.failed + counts.canceled;
   return <>
     <header className="mb-5 flex flex-wrap items-center justify-between gap-3">
       <div><p className="hint mb-1">Run #{run.id} · {startedAt(run.reports[0].startedAt)}</p>
         <h1 className="text-2xl">{grades ? `Course evaluation · ${grades.total} ${grades.total === 1 ? "pair" : "pairs"}` : "Single function"}</h1></div>
+      {finished < run.reports.length && <CancelAudit scope="run" id={run.id} />}
       {grades?.scored === run.pairs.length && <a href={`/runs/${run.id}/result.jsonl`} download className={buttonVariants({ variant: "outline", size: "sm" })}>
         <DownloadIcon />Download result.jsonl</a>}
     </header>
     <section className="mb-5 flex flex-col gap-2">
       <h2>Execution progress</h2>
-      <p role="status">{`${finished}/${run.reports.length} reports finished · ${counts.completed} completed · ${counts.failed} failed · ${counts.running} running · ${counts.queued} queued`}</p>
+      <p role="status">{`${finished}/${run.reports.length} reports finished · ${counts.completed} completed · ${counts.failed} failed · ${counts.running} running · ${counts.queued} queued`}{counts.canceled > 0 && ` · ${counts.canceled} canceled`}</p>
       <progress className="w-full" aria-label="Reports finished" max={run.reports.length} value={finished} />
     </section>
     {grades ? <>
       <section className="mb-5 rounded-md border bg-muted/30 p-4">
         <h2>Course grades</h2>
-        <p className="my-2">{`${grades.scored}/${grades.total} pairs scored · ${grades.counts.failed} failed · ${grades.counts.pending} awaiting results`}</p>
+        <p className="my-2">{`${grades.scored}/${grades.total} pairs scored · ${grades.counts.failed} failed · ${grades.counts.pending} awaiting results`}{grades.counts.canceled > 0 && ` · ${grades.counts.canceled} canceled`}</p>
         <div className="flex flex-wrap gap-2">{(["P-C", "P-R", "P-V", "P-B"] as const).map(grade =>
           <Badge key={grade} variant="outline">{grade} · {labels[grade]} · {grades.counts[grade]}</Badge>)}</div>
       </section>

@@ -38,7 +38,9 @@ test("CLI and workspace share one bounded queue, pair grades and interrupted-run
   execFileSync(process.execPath, ["src/cli.ts", "prepare"], { cwd });
   await rm(join(cwd, "data/raw"), { recursive: true });
   let gate = Promise.withResolvers();
-  const thirdReport = Promise.withResolvers();
+  let thirdReport = Promise.withResolvers();
+  let thirdStarted = Promise.withResolvers();
+  let disconnected = 0;
   let atCapacity = Promise.withResolvers();
   const firstLookups = Promise.withResolvers();
   let lookupCount = 0;
@@ -54,12 +56,13 @@ test("CLI and workspace share one bounded queue, pair grades and interrupted-run
     const lookup = !three && !messages.some(message => message.role === "tool");
     active++;
     peak = Math.max(peak, active);
-    res.once("close", () => active--);
+    res.once("close", () => { active--; if (!res.writableEnded) disconnected++; });
     if (lookup) {
       if (++lookupCount === 2) firstLookups.resolve();
       await firstLookups.promise;
     } else {
       if (active === 2) atCapacity.resolve();
+      if (three) thirdStarted.resolve();
       await gate.promise;
       if (three) await thirdReport.promise;
     }
@@ -108,6 +111,9 @@ test("CLI and workspace share one bounded queue, pair grades and interrupted-run
   t.after(() => db.close());
   const terminal = async id => (await fetch(base + `/reports/${id}/events`)).text();
   await atCapacity.promise;
+  const runningPage = (await (await fetch(report)).text()).replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "");
+  assert.match(runningPage, /Audit timeline/);
+  assert.match(runningPage, /Audit queued[\s\S]*Preparing the submitted function[\s\S]*Review started[\s\S]*search_cases[\s\S]*Returned/);
   cliEnv.FUNC_AUDIT_CONCURRENCY = "4";
   assert.deepEqual(JSON.parse(cli("audit", "all")), { id: 2, pairs: 2, reports: 3 });
   cliEnv.FUNC_AUDIT_CONCURRENCY = "2";
@@ -147,6 +153,7 @@ test("CLI and workspace share one bounded queue, pair grades and interrupted-run
   assert.match(html, /Returns a constant\./);
   assert.match(html, /False negative/);
   assert.match(html, /aria-label="Report sections"/);
+  assert.match(html, /aria-label="View source: Submitted function · L1–1"/);
   assert.match(await (await fetch(run)).text(), /2\/2 pairs scored/);
   assert.deepEqual(JSON.parse(cli("score", "2")).pairs, [{ number: 1, grade: "P-B" }, { number: 2, grade: "P-R" }]);
   const exported = await (await fetch(run + "/result.jsonl")).text();
@@ -178,4 +185,45 @@ test("CLI and workspace share one bounded queue, pair grades and interrupted-run
   assert.match(results[1], /event: finished\ndata: failed/);
   assert.match(results[2], /event: finished\ndata: completed/);
   assert.match(await (await fetch(base + "/reports/11")).text(), /audit process stopped before saving a result/);
+
+  gate = Promise.withResolvers();
+  atCapacity = Promise.withResolvers();
+  thirdStarted = Promise.withResolvers();
+  thirdReport = Promise.withResolvers();
+  const cancel = async path => {
+    const response = await fetch(base + path, { method: "POST", headers: { origin: base }, body: new URLSearchParams({ intent: "cancel" }) });
+    assert.equal(response.status, 200);
+    await response.text();
+  };
+  assert.equal(JSON.parse(cli("audit", "all")).id, 6);
+  await atCapacity.promise;
+  const assertCancelTrigger = async (path, label) => {
+    const html = await (await fetch(base + path)).text();
+    const button = html.match(new RegExp(`<button\\b([^>]*)>${label}</button>`))?.[1];
+    assert.ok(button?.includes('aria-haspopup="dialog"'), `${label} opens the confirmation dialog`);
+    assert.ok(button.includes('type="button"'));
+  };
+  await assertCancelTrigger("/reports/14", "Cancel report");
+  assert.equal(JSON.parse(cli("audit", "all")).id, 7);
+  await assertCancelTrigger("/runs/7", "Cancel run");
+  await cancel("/runs/7");
+  for (const id of [17, 18, 19]) {
+    const stream = await terminal(id);
+    assert.match(stream, /event: finished\ndata: canceled/);
+    assert.deepEqual(parseEntries(stream).map(entry => entry.event.kind), ["accepted"]);
+  }
+  const beforeCancel = disconnected;
+  await cancel("/reports/14");
+  await thirdStarted.promise; // The backend must release a slot while the other model request is still blocked.
+  assert.ok(disconnected > beforeCancel, "canceling the report closes the active model request");
+  gate.resolve();
+  assert.match(await terminal(15), /event: finished\ndata: completed/);
+  await cancel("/runs/6");
+  await cancel("/runs/6");
+  assert.match(await terminal(16), /event: finished\ndata: canceled/);
+  assert.deepEqual(JSON.parse(cli("report", "6")).reports.map(r => r.status), ["canceled", "completed", "canceled"]);
+  assert.equal(JSON.parse(cli("score", "6")).counts.canceled, 2);
+  assert.match(await (await fetch(base + "/runs/6")).text(), /3\/3 reports finished/);
+  assert.equal((await fetch(base + "/runs/6/result.jsonl")).status, 409);
+  thirdReport.resolve();
 });

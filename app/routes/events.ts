@@ -27,7 +27,7 @@ export function loader({ params, request }: Route.LoaderArgs) {
           controller.enqueue(encoder.encode(`id: ${entry.seq}\ndata: ${JSON.stringify(entry)}\n\n`));
           after = entry.seq;
         }
-        if (page.status === "completed" || page.status === "failed") {
+        if (page.status !== "queued" && page.status !== "running") {
           controller.enqueue(encoder.encode(`event: finished\ndata: ${page.status}\n\n`));
           controller.close();
         } else {

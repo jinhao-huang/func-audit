@@ -50,11 +50,11 @@ mise run score 3
 mise run export 3 > data/results/predictions.jsonl
 ```
 
-Each pair with two completed predictions receives a grade. **P-C** means both correct, **P-R** both reversed, **P-V** both predicted vulnerable, and **P-B** both predicted benign. `score` returns per-pair results and counts, including pending and failed pairs. Export requires all reports to succeed and writes one JSON line per distinct sample ID. The CLI and workspace store runs in `data/results/runs.sqlite`.
+Each pair with two completed predictions receives a grade. **P-C** means both correct, **P-R** both reversed, **P-V** both predicted vulnerable, and **P-B** both predicted benign. `score` returns per-pair results and counts, including pending, failed, and canceled pairs. Export requires all reports to succeed and writes one JSON line per distinct sample ID. The CLI and workspace store runs in `data/results/runs.sqlite`.
 
 ## Open the workspace
 
-Run `mise run dev` and open the local URL. In **New audit → Course pairs**, enter a selection and check the pair and report counts before choosing **Start audit**. Select a run for live progress and grades. Expand a pair to open its reports. **Verdict** shows the prediction and reasoning, **Evidence** shows the cited source lines, and **Tools** shows each call's arguments and output. You can close the tab while the executor works and reopen it later.
+Run `mise run dev` and open the local URL. In **New audit → Course pairs**, enter a selection and check the pair and report counts before choosing **Start audit**. Select a run for live progress and grades. Expand a pair to open its reports. Active reports open on **Timeline**. For a source snapshot, it shows the bytes downloaded (and the total when available), followed by archive extraction and function lookup. Expand a tool call to inspect its arguments and result as they arrive. Finished reports open on **Verdict**. Select a citation in the verdict, timeline, or **Evidence** tab to jump to the corresponding lines in the submitted function or snapshot read. Choose **Cancel report** or **Cancel run**, then confirm in the dialog. Canceling a run stops all its queued and running reports and preserves completed results. Closing the tab lets the audit continue in the background.
 
 For an ad hoc review, select **Single function** and paste a JSON object such as `{"idx":1,"func":"int one() { return 1; }"}`. An optional binary `target` lets you compare that prediction with its reference label. To serve a production build locally, run `mise exec -- pnpm build` followed by `mise exec -- pnpm start`.
 

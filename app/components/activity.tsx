@@ -1,52 +1,105 @@
-import { BookOpenIcon, FileTextIcon, SearchIcon } from "lucide-react";
+import { ArchiveIcon, BookOpenIcon, ClipboardListIcon, DownloadIcon, FileTextIcon, FolderOpenIcon, SearchIcon, ScanTextIcon } from "lucide-react";
+import type { AuditEvent, Entry } from "../../src/reports.ts";
 import { CodeBlock, CodeBlockContent, CodeBlockHeader, CodeBlockTitle } from "./ui/code-block";
-import { Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger, TraceIcon, TraceLine, TraceTitle } from "./ui/trace";
-import type { CaseSearchRecord, Entry } from "../../src/reports.ts";
-import type { Lookup } from "../../src/source-tools.ts";
+import { Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger, TraceDescription, TraceIcon, TraceLine, TraceTitle } from "./ui/trace";
+import type { SourceRange } from "../../src/evidence.ts";
+import { SourceLines } from "./source-lines";
 
-type Call = { name: string; args: object; output?: string; error?: boolean };
-
-function lookupResult(lookup: Lookup): Call {
-  return { name: lookup.tool, args: lookup.args, output: lookup.result, error: lookup.error };
+function milestone(event: Extract<AuditEvent, { kind: "accepted" | "prepare" | "review" }>) {
+  if (event.kind === "accepted") return { Icon: ClipboardListIcon, title: "Audit queued" };
+  if (event.kind === "prepare") return { Icon: FolderOpenIcon, title: event.snapshot ? "Preparing the source snapshot" : "Preparing the submitted function" };
+  const location = event.snapshot;
+  return { Icon: ScanTextIcon, title: location ? `Review started · ${location.path} · L${location.startLine}–${location.endLine}` : "Review started" };
 }
 
-function caseResult(search: CaseSearchRecord): Call {
-  return { name: "search_cases", args: { mode: search.mode, query: search.query },
-    output: "error" in search ? search.error : JSON.stringify(search.hits, null, 2), error: "error" in search };
+export const snapshotStages = {
+  download: "Downloading the source archive", extract: "Extracting the source archive", locate: "Locating the submitted function",
+};
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / 1024 ** 2).toFixed(2)} MiB`;
 }
 
-function toolCalls(entries: Entry[]) {
-  const calls = new Map<string, Call>();
-  for (const { event } of entries) {
-    if (event.kind === "tool") calls.set(event.callId, { name: event.name, args: event.args });
-    if (event.kind === "lookup") calls.set(event.callId, lookupResult(event.lookup));
-    if (event.kind === "cases") calls.set(event.callId, caseResult(event.search));
+type ToolEvent = Extract<AuditEvent, { callId: string }>;
+
+type Call = { name: string; args: object; output?: string; error?: boolean; startLine?: number };
+
+function toolDetails(event: ToolEvent): Call {
+  if (event.kind === "lookup") {
+    const { tool: name, args, result, error } = event.lookup;
+    return { name, args, output: result, error, startLine: !error && "startLine" in args ? args.startLine : undefined };
   }
-  return Array.from(calls.values());
+  if (event.kind === "cases") {
+    const search = event.search;
+    return { name: "search_cases", args: { mode: search.mode, query: search.query }, error: "error" in search,
+      output: "error" in search ? search.error : JSON.stringify(search.hits, null, 2) };
+  }
+  return event;
 }
 
-export function Activity({ entries, active }: { entries: Entry[]; active: boolean }) {
-  const calls = toolCalls(entries);
-  return <section><h2>Tool activity <span className="count">{calls.length}</span></h2>
-    {!calls.length && <p className="hint mt-3">No tool calls recorded.</p>}
-    <Trace className="mt-4">{calls.map((call, i) => {
+function toolSubject(args: object) {
+  if ("query" in args) return String(args.query);
+  if ("pattern" in args) return "path" in args ? `${args.pattern} · ${args.path}` : String(args.pattern);
+  if ("path" in args && "startLine" in args && "endLine" in args) return `${args.path} · L${args.startLine}–${args.endLine}`;
+  return JSON.stringify(args);
+}
+
+export function Activity({ entries, active, expanded, setOpen, citation }: {
+  entries: Entry[]; active: boolean; expanded: ReadonlySet<string>; setOpen: (id: string, open: boolean) => void;
+  citation?: SourceRange & { callId?: string };
+}) {
+  // Replacing a call with its result keeps it at the position where it started.
+  const rows = new Map<string | number, AuditEvent>();
+  for (const { seq, event } of entries) rows.set("callId" in event ? event.callId : event.kind === "download" ? -1 : seq, event);
+  const latestKind = entries.at(-1)?.event.kind;
+  return <Trace aria-label="Audit activity" role="list" className="border-s ps-3">
+    {Array.from(rows, ([key, event]) => {
+      if (event.kind === "download") {
+        const inProgress = active && latestKind === "download";
+        return <div role="listitem" key={key} className="flex-col items-start gap-1">
+          <TraceLine><TraceIcon><DownloadIcon /></TraceIcon><TraceTitle>Source download</TraceTitle>
+            <TraceDescription>{formatBytes(event.bytes)}{event.total && ` / ${formatBytes(event.total)}`}</TraceDescription>
+          </TraceLine>
+          {inProgress && event.total !== undefined && <progress className="ms-6 w-36" aria-label="Source archive download"
+            max={event.total} value={event.bytes} />}
+        </div>;
+      }
+      if (event.kind === "extract" || event.kind === "locate") {
+        const Icon = event.kind === "extract" ? ArchiveIcon : SearchIcon;
+        return <div role="listitem" key={key}><TraceLine><TraceIcon><Icon /></TraceIcon>
+          <TraceTitle>{snapshotStages[event.kind]}</TraceTitle></TraceLine></div>;
+      }
+      if (!("callId" in event)) {
+        const { Icon, title } = milestone(event);
+        return <div role="listitem" key={key}><TraceLine><TraceIcon><Icon /></TraceIcon><TraceTitle>{title}</TraceTitle></TraceLine></div>;
+      }
+      const { callId } = event;
+      const call = toolDetails(event);
       const Icon = call.name === "search_cases" ? BookOpenIcon : call.name === "grep" ? SearchIcon : FileTextIcon;
-      const waiting = call.output === undefined;
-      const status = waiting && active ? "running" : call.error || waiting ? "error" : undefined;
-      const args = JSON.stringify(call.args);
-      return <TraceCollapsible key={i} className="rounded-md border"><TraceCollapsibleTrigger className="w-full justify-between px-3 py-2.5 hover:bg-muted">
-        <TraceLine status={status} className="flex-1"><TraceIcon><Icon /></TraceIcon><TraceTitle>
-          <strong>{call.name}</strong> {call.error ? "failed · " : waiting ? (active ? "running · " : "interrupted · ") : ""}{args}
-        </TraceTitle></TraceLine>
-      </TraceCollapsibleTrigger><TraceCollapsibleContent>
-        <CodeBlock size="sm" className="mb-2"><CodeBlockHeader><CodeBlockTitle>Arguments</CodeBlockTitle></CodeBlockHeader>
-          <CodeBlockContent className="max-h-64">{JSON.stringify(call.args, null, 2)}</CodeBlockContent>
-        </CodeBlock>
-        <CodeBlock size="sm" variant={status === "error" ? "destructive" : "default"}>
-          <CodeBlockHeader><CodeBlockTitle>{call.error ? "Error" : "Output"}</CodeBlockTitle></CodeBlockHeader>
-          <CodeBlockContent className="max-h-80">{call.output ?? (active ? "Running…" : "No result recorded.")}</CodeBlockContent>
-        </CodeBlock>
-      </TraceCollapsibleContent></TraceCollapsible>;
-    })}</Trace>
-  </section>;
+      const waiting = event.kind === "tool";
+      const error = call.error;
+      const state = waiting ? (active ? "Running" : "Interrupted") : error ? "Failed" : "Returned";
+      return <TraceCollapsible key={`tool-${callId}`} role="listitem" open={expanded.has(callId)} onOpenChange={open => setOpen(callId, open)}>
+        <TraceCollapsibleTrigger className="w-full justify-between">
+          <TraceLine status={waiting && active ? "running" : error || waiting ? "error" : undefined} className="flex-1">
+            <TraceIcon><Icon /></TraceIcon><TraceTitle><strong>{call.name}</strong> {toolSubject(call.args)}</TraceTitle>
+            <TraceDescription>{state}</TraceDescription>
+          </TraceLine>
+        </TraceCollapsibleTrigger>
+        <TraceCollapsibleContent className="flex flex-col gap-2">
+          <CodeBlock size="sm"><CodeBlockHeader><CodeBlockTitle>Arguments</CodeBlockTitle></CodeBlockHeader>
+            <CodeBlockContent className="max-h-64">{JSON.stringify(call.args, null, 2)}</CodeBlockContent>
+          </CodeBlock>
+          <CodeBlock size="sm" variant={error || (waiting && !active) ? "destructive" : "default"}>
+            <CodeBlockHeader><CodeBlockTitle>{error ? "Error" : "Output"}</CodeBlockTitle></CodeBlockHeader>
+            {call.startLine !== undefined && call.output !== undefined ? <SourceLines startLine={call.startLine} text={call.output}
+              citation={citation?.callId === callId ? citation : undefined} />
+              : <CodeBlockContent className="max-h-80">{call.output ?? (active ? "Waiting for a result…" : "No result recorded.")}</CodeBlockContent>}
+          </CodeBlock>
+        </TraceCollapsibleContent>
+      </TraceCollapsible>;
+    })}
+  </Trace>;
 }

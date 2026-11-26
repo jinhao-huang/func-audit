@@ -2,6 +2,7 @@ import { Badge } from "./ui/badge";
 import type { Summary } from "../../src/reports.ts";
 
 export function Status({ report }: { report: Pick<Summary, "status" | "target" | "prediction"> }) {
+  if (report.status === "canceled") return <Badge variant="outline">Canceled</Badge>;
   if (report.status === "failed") return <Badge variant="destructive">Failed</Badge>;
   if (report.status === "queued") return <Badge variant="outline">Queued</Badge>;
   if (report.status === "running") return <Badge variant="secondary">Running</Badge>;
