@@ -60,7 +60,9 @@ mise run export 3 > data/results/predictions.jsonl
 
 ## 结合仓库源码审计
 
-课程样本带有 `commit_url` 时，运行同一条命令即可从 GitHub 下载临时源码快照，并用 `tar` 解压。`target` 为 `1` 时取修复提交的唯一父版本，为 `0` 时取修复提交本身。CLI 会先在快照中定位函数。版本不可用、找不到函数或匹配到多处时，报告会记录失败原因。如果快照含有仅大小写不同的路径，请将 `TMPDIR` 设为区分大小写的卷上已有的目录。样本没有提交链接时，CLI 会跳过快照。
+样本带有 `commit_url` 时，首次审计会用 Git 拉取修复提交和父提交，缓存在 `${XDG_CACHE_HOME:-~/.cache}/func-audit/repos/github.com/<owner>/<repo>.git`。可用绝对路径设置 `XDG_CACHE_HOME` 来更改默认位置。CLI、工作台和同一用户的不同工作树共用这份缓存。并发请求同一修复提交只会拉取一次，此后离线也能准备修复前后的源码。
+
+每份报告用 `tar` 将选定版本解压到独立的临时目录。`target` 为 `1` 时取修复提交的唯一父版本，为 `0` 时取修复提交本身。审计会先定位函数，再调用模型。版本不可用、找不到函数或匹配到多处时，报告会记录失败原因。如果源码含有仅大小写不同的路径，请将 `TMPDIR` 设为区分大小写的卷上已有的目录。样本没有提交链接时会跳过快照。如需释放空间，可在相关审计结束后删除对应仓库的缓存目录。
 
 Pi 用 `grep(pattern)` 搜索整个快照，也可以传入相对路径 `path`，只查指定文件或目录。每处匹配的相对路径、行号和列号都可以直接传给 `lsp(operation, path, line, column)`。行号和列号都从 1 开始，列按 UTF-16 计算。clangd 支持查定义（`definition`）、查引用（`references`）、查看符号说明（`hover`）和查类型定义（`typeDefinition`）。Pi 可以查看在快照中有定义或声明的符号说明。定义查询有时会定位到头文件中的声明。如果 clangd 不可用或在快照中找不到定义，ctags-lsp 会列出同名候选，Pi 可以用 `read(path, startLine, endLine)` 核对原文。
 
