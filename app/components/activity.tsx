@@ -11,7 +11,7 @@ function lookupResult(lookup: Lookup): Call {
 }
 
 function caseResult(search: CaseSearchRecord): Call {
-  return { name: "search_cases", args: { query: search.query },
+  return { name: "search_cases", args: { mode: search.mode, query: search.query },
     output: "error" in search ? search.error : JSON.stringify(search.hits, null, 2), error: "error" in search };
 }
 

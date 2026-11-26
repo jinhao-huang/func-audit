@@ -66,8 +66,11 @@ Pi 用 `grep(pattern)` 搜索整个快照，传入可选的 `path` 可将范围�
 
 ## 使用历史案例
 
-提供知识库时，`mise run prepare` 会创建 `data/prepared/cases.sqlite`，为每个有英文描述的 CVE 生成一条向量。首次建库会把 BGE Small 模型下载到 `data/models/`，权重约 133 MB，之后可以复用。如果下载中断后模型一直加载失败，删除 `data/models/BAAI/bge-small-en-v1.5/`，再运行 `mise run prepare`。已有工作区升级后也要运行一次 `prepare`。审计时在本地编码查询并读取索引。没有索引时，Pi 只审查源码。
+提供知识库时，`mise run prepare` 会创建 `data/prepared/cases.sqlite`，为每个有英文描述的 CVE 生成一条向量。首次建库会把 BGE Small 模型下载到 `data/models/`，权重约 133 MB，之后可以复用。如果下载中断后模型一直加载失败，删除 `data/models/BAAI/bge-small-en-v1.5/`，再运行 `mise run prepare`。审计时直接查询本地索引。没有索引时，Pi 只审查源码。
 
-Pi 可以用 API 名称、CWE 编号或简短的英文描述调用 `search_cases(query)`。BM25 在函数、漏洞描述、提交说明和标识符中匹配关键词，向量检索按描述的语义相似度查找 CVE。两路各取前 20 个不同的 CVE，按各自名次的倒数加权合并，最多返回三个案例。关键词命中时展示匹配的源码记录，仅语义命中时展示生成该向量的记录。
+Pi 每次调用 `search_cases({ mode, query })` 时选择一种模式，每次最多返回三个不同的 CVE。
 
-报告的 `context.caseSearches` 按执行顺序保存 Pi 的查询，列表为空表示 Pi 没有调用检索工具。查询失败时，`error` 记录失败原因。每条结果都包含从 1 开始的评测副本行号、CVE、CWE、描述、提交说明（`commitMessage`）和源码摘录。提交说明过长时，优先摘录命中词附近的原文。`hits` 为空表示这次没有找到符合条件的案例。历史案例供分析时参考，报告中的证据仍须引用当前函数或快照源码。
+- `keyword` 适合查 API 名称、CVE 或 CWE 编号。BM25 在函数、描述、提交说明和标识符中匹配关键词，每个 CVE 取排名最高的匹配记录。
+- `semantic` 适合用简短英文描述代码行为。BGE Small 按这段话与 CVE 描述的相似度排序，返回生成对应向量的原始记录。
+
+报告的 `context.caseSearches` 按执行顺序保存每次调用的模式和查询文本，列表为空表示 Pi 没有调用检索工具。查询失败时，`error` 记录失败原因。每条结果都包含从 1 开始的评测副本行号、CVE、CWE、描述、提交说明（`commitMessage`）和源码摘录。关键词检索会从较长的提交说明中摘录命中词附近的原文。`hits` 为空表示这次没有找到符合条件的案例。历史案例供分析时参考，报告中的证据仍须引用当前函数或快照源码。

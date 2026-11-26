@@ -11,7 +11,9 @@ export type CaseHit = {
   commitMessage: string;
   excerpt: string;
 };
-export type CaseSearch = { query: string; hits: CaseHit[] };
+export const caseSearchModes = ["keyword", "semantic"] as const;
+export type CaseQuery = { mode: typeof caseSearchModes[number]; query: string };
+export type CaseSearch = CaseQuery & { hits: CaseHit[] };
 
 export async function buildCaseIndex(file: string, destination: string) {
   using db = new DatabaseSync(destination);
@@ -40,19 +42,12 @@ export async function buildCaseIndex(file: string, destination: string) {
   return count;
 }
 
-const candidateCount = 20;
-
-// Reciprocal rank fusion uses one-based ranks with k = 60.
-function rankWeight(zeroBasedRank: number) {
-  return 1 / (60 + zeroBasedRank + 1);
-}
-
+const hitLimit = 3;
 const fields = `rowid AS line, cve, cwe, substr(description, 1, 900) AS description`;
 
-export async function searchCases(file: string, query: string): Promise<CaseSearch> {
+function keywordHits(db: DatabaseSync, query: string): CaseHit[] {
   const terms = [...new Set(query.toLowerCase().match(/[a-z0-9_]+(?:-[a-z0-9_]+)*/g) ?? [])].slice(0, 16);
-  if (!terms.length) return { query, hits: [] };
-  using db = new DatabaseSync(file, { readOnly: true });
+  if (!terms.length) return [];
   const ranked = db.prepare(`
     SELECT ${fields},
            CASE WHEN length(message) <= 800 THEN message
@@ -60,26 +55,28 @@ export async function searchCases(file: string, query: string): Promise<CaseSear
            substr(snippet(cases, 0, '', '', ' … ', 32), 1, 800) AS excerpt
     FROM cases WHERE cases MATCH ? ORDER BY rank, rowid
   `);
-  const candidates = new Map<string, { hit: CaseHit; score: number }>();
+  const hits = new Map<string, CaseHit>();
   for (const row of ranked.iterate(terms.map(term => `"${term}"`).join(" OR "))) {
     const hit = row as CaseHit;
-    if (candidates.has(hit.cve)) continue;
-    candidates.set(hit.cve, { hit, score: rankWeight(candidates.size) });
-    if (candidates.size === candidateCount) break;
+    if (hits.has(hit.cve)) continue;
+    hits.set(hit.cve, hit);
+    if (hits.size === hitLimit) break;
   }
+  return [...hits.values()];
+}
 
-  const nearest = await nearestDescriptions(db, query, candidateCount);
-  if (nearest.length) {
-    const get = db.prepare(`SELECT ${fields}, substr(message, 1, 800) AS commitMessage,
-      substr(func, 1, 800) AS excerpt FROM cases WHERE rowid = ?`);
-    for (const [index, line] of nearest.entries()) {
-      const hit = get.get(line) as CaseHit;
-      const score = rankWeight(index);
-      const lexical = candidates.get(hit.cve);
-      if (lexical) lexical.score += score;
-      else candidates.set(hit.cve, { hit, score });
+export async function searchCases(file: string, request: CaseQuery): Promise<CaseSearch> {
+  using db = new DatabaseSync(file, { readOnly: true });
+  switch (request.mode) {
+    case "keyword":
+      return { ...request, hits: keywordHits(db, request.query) };
+    case "semantic": {
+      const lines = await nearestDescriptions(db, request.query, hitLimit);
+      const get = db.prepare(`SELECT ${fields}, substr(message, 1, 800) AS commitMessage,
+        substr(func, 1, 800) AS excerpt FROM cases WHERE rowid = ?`);
+      return { ...request, hits: lines.map(line => get.get(line) as CaseHit) };
     }
+    default:
+      throw new Error("Expected search mode keyword or semantic.");
   }
-  const hits = [...candidates.values()].sort((a, b) => b.score - a.score).slice(0, 3).map(row => row.hit);
-  return { query, hits };
 }

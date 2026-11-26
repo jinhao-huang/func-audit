@@ -64,7 +64,8 @@ test("CLI and workspace share one bounded queue, pair grades and interrupted-run
       if (three) await thirdReport.promise;
     }
     const delta = lookup ? { tool_calls: [{ index: 0, id: "lookup", type: "function",
-      function: { name: "search_cases", arguments: '{"query":"one"}' } }] } : {
+      function: { name: "search_cases", arguments: JSON.stringify(source.includes("one()")
+        ? { mode: "keyword", query: "one" } : { mode: "semantic", query: "returns a constant" }) } }] } : {
       content: failThree && three ? "{}" : JSON.stringify({ prediction: Number(three), reason: "Returns a constant.", evidence: [{ startLine: 1, endLine: 1 }] }),
     };
     const chunk = { choices: [{ index: 0, delta, finish_reason: lookup ? "tool_calls" : "stop" }] };
@@ -125,10 +126,15 @@ test("CLI and workspace share one bounded queue, pair grades and interrupted-run
   const replay = await resumed.text();
   const parseEntries = text => text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
   assert.ok(parseEntries(replay).every(entry => entry.seq > Number(cursor)));
-  for (const stream of [replay, await terminal(2)]) {
+  for (const [i, stream] of [replay, await terminal(2)].entries()) {
     assert.match(stream, /event: finished\ndata: completed/);
     const lookup = parseEntries(stream).find(({ event }) => event.kind === "cases");
-    assert.deepEqual(lookup?.event.search.hits?.map(hit => hit.cve), ["CVE-2020-1234"]);
+    const expected = i === 0 ? { mode: "keyword", query: "one" } : { mode: "semantic", query: "returns a constant" };
+    const { hits, ...args } = lookup.event.search;
+    assert.deepEqual(args, expected);
+    assert.deepEqual(hits.map(hit => hit.cve), i === 0 ? ["CVE-2020-1234"] : []);
+    const saved = JSON.parse(cli("report", "1")).reports[i];
+    assert.deepEqual(saved.context.caseSearches, [lookup.event.search]);
   }
   const inProgress = await (await fetch(run)).text();
   assert.match(inProgress, /2\/3 reports finished/);

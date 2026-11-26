@@ -1,6 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { type MessagePort, Worker } from "node:worker_threads";
-import { searchCases } from "./cases.ts";
+import { type CaseQuery, searchCases } from "./cases.ts";
 import { openDatabase } from "./database.ts";
 import { failReport } from "./reports.ts";
 import { configuredEndpoint } from "./project-api.ts";
@@ -17,9 +17,9 @@ async function execute(job: Job) {
         workerData: { id: job.id, sample }, env: { ...process.env, FUNC_AUDIT_MODEL: job.model }, execArgv: [],
       });
       // Keep the native inference session on one thread, shared by all audit workers.
-      worker.on("message", async ({ query, reply }: { query: string; reply: MessagePort }) => {
+      worker.on("message", async ({ request, reply }: { request: CaseQuery; reply: MessagePort }) => {
         try {
-          reply.postMessage(await searchCases(caseIndexPath, query));
+          reply.postMessage(await searchCases(caseIndexPath, request));
         } catch (cause) {
           reply.postMessage({ error: cause instanceof Error ? cause.message : String(cause) });
         } finally {

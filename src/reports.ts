@@ -3,9 +3,9 @@ import { openDatabase as open } from "./database.ts";
 import type { reviewFunction } from "./review.ts";
 import type { SnapshotMetadata } from "./snapshot.ts";
 import type { Lookup } from "./source-tools.ts";
-import type { CaseSearch } from "./cases.ts";
+import type { CaseQuery, CaseSearch } from "./cases.ts";
 
-export type CaseSearchRecord = CaseSearch | { query: string; error: string };
+export type CaseSearchRecord = CaseSearch | (CaseQuery & { error: string });
 type AuditContext = { snapshot?: SnapshotMetadata; lookups?: Lookup[]; caseSearches?: CaseSearchRecord[] };
 export type Result = Awaited<ReturnType<typeof reviewFunction>>;
 export type ReportStatus = "queued" | "running" | "completed" | "failed";

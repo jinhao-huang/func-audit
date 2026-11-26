@@ -7,7 +7,7 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import type { CaseSearch } from "./cases.ts";
+import { caseSearchModes, type CaseQuery, type CaseSearch } from "./cases.ts";
 import { projectApi } from "./project-api.ts";
 import { sourceTools, type Lookup } from "./source-tools.ts";
 import type { SnapshotMetadata } from "./snapshot.ts";
@@ -72,7 +72,7 @@ export async function reviewFunction(source: string, snapshot?: {
   root: string;
   location: Pick<SnapshotMetadata, "path" | "startLine" | "endLine">;
   onLookup: (lookup: Lookup, callId: string) => void;
-}, searchCases?: (query: string, callId: string) => Promise<CaseSearch>,
+}, searchCases?: (request: CaseQuery, callId: string) => Promise<CaseSearch>,
   onStart?: (callId: string, name: string, args: object) => void) {
   const { modelRuntime, model } = await projectApi();
   const lines = source.split(/\r?\n/);
@@ -98,12 +98,15 @@ export async function reviewFunction(source: string, snapshot?: {
     }, startTool) : []),
     ...(searchCases ? [defineTool({
       name: "search_cases", label: "Search historical cases",
-      description: "Look up historical maintenance cases by identifiers, APIs, or short English descriptions.",
-      parameters: Type.Object({ query: Type.String({ minLength: 1, maxLength: 500 }) }),
-      execute: async (id, { query }) => {
+      description: "Search historical cases. Use keyword for API names, identifiers, or CVE/CWE IDs. Use semantic for a short English description of behavior.",
+      parameters: Type.Object({
+        mode: Type.Enum(caseSearchModes, { type: "string" }),
+        query: Type.String({ pattern: "\\S", maxLength: 500 }),
+      }, { additionalProperties: false }),
+      execute: async (id, request) => {
         try {
-          startTool(id, "search_cases", { query });
-          const result = await searchCases(query, id);
+          startTool(id, "search_cases", request);
+          const result = await searchCases(request, id);
           return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: undefined };
         } catch (cause) {
           abortReview("Historical case lookup failed", cause);

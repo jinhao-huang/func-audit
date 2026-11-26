@@ -1,11 +1,11 @@
 import { existsSync } from "node:fs";
-import type { CaseSearch } from "./cases.ts";
+import type { CaseQuery, CaseSearch } from "./cases.ts";
 import { completeReport, failReport, recordEvent } from "./reports.ts";
 import { reviewFunction } from "./review.ts";
 import { caseIndexPath, type Sample } from "./samples.ts";
 import { prepareSnapshot } from "./snapshot.ts";
 
-export async function runAudit(id: number, sample: Sample, lookupCases: (query: string) => Promise<CaseSearch>) {
+export async function runAudit(id: number, sample: Sample, lookupCases: (request: CaseQuery) => Promise<CaseSearch>) {
   let snapshot: Awaited<ReturnType<typeof prepareSnapshot>> | undefined;
   try {
     // The OpenAI client merges ambient headers into explicitly configured requests.
@@ -19,12 +19,12 @@ export async function runAudit(id: number, sample: Sample, lookupCases: (query: 
     const report = await reviewFunction(sample.func, snapshot && {
       root: snapshot.root, location: snapshot.metadata,
       onLookup: (lookup, callId) => recordEvent(id, { kind: "lookup", callId, lookup }),
-    }, cases ? async (query, callId) => {
+    }, cases ? async (request, callId) => {
       let search;
       try {
-        search = await lookupCases(query);
+        search = await lookupCases(request);
       } catch (cause) {
-        recordEvent(id, { kind: "cases", callId, search: { query, error: cause instanceof Error ? cause.message : String(cause) } });
+        recordEvent(id, { kind: "cases", callId, search: { ...request, error: cause instanceof Error ? cause.message : String(cause) } });
         throw cause;
       }
       recordEvent(id, { kind: "cases", callId, search });

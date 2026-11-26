@@ -13,7 +13,7 @@ function historical(cve, commit, func = "int copy_item(void);") {
     commit_id: commit, commit_message: "Check the supplied size." };
 }
 
-// Keep the model boundary offline while exercising the real SQLite index and rank fusion.
+// Keep the model boundary offline while exercising both search modes against the SQLite index.
 const encodings = [];
 let queryModelLoads = 0;
 mock.module("@huggingface/transformers", { exports: {
@@ -37,7 +37,7 @@ mock.module("@huggingface/transformers", { exports: {
   },
 } });
 
-test("hybrid search fuses distinct CVEs and preserves the strongest lexical row", async (t) => {
+test("keyword search deduplicates CVEs and concurrent semantic searches share one encoder", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "func-audit-cases-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const file = join(dir, "knowledge.eval.jsonl");
@@ -58,20 +58,26 @@ test("hybrid search fuses distinct CVEs and preserves the strongest lexical row"
   assert.deepEqual(encodings[0].texts.toSorted(), ["Object lifetime.", "Object lifetime.", "Validate the item length."]);
   using db = new DatabaseSync(index, { readOnly: true });
   assert.equal(db.prepare("SELECT sum(length(embedding)) AS bytes FROM vectors").get().bytes, 3 * 384 * 4);
-  const search = async query => (await searchCases(index, query)).hits;
-  const [hits, semanticHits] = await Promise.all([search("dangling rare_operation initialize"), search("dangling")]);
-  assert.equal(queryModelLoads, 1);
-  assert.deepEqual(hits.map(hit => hit.cve), ["both", "semantic", "lexical"]);
+  const search = async (mode, query) => (await searchCases(index, { mode, query })).hits;
+  const hits = await search("keyword", "rare_operation initialize lifetime");
+  assert.equal(hits[0].cve, "both");
   assert.equal(hits[0].line, 5);
   assert.match(hits[0].commitMessage, /Initialize the cache\./);
   assert.ok(hits[0].commitMessage.length <= 800);
-  assert.equal(hits[1].line, 2);
+  assert.deepEqual(hits.map(hit => hit.cve).sort(), ["both", "lexical", "semantic"]);
+  assert.deepEqual(await search("keyword", "dangling"), []);
+  assert.deepEqual(await search("keyword", ' + "'), []);
+  assert.equal(queryModelLoads, 0);
+
+  const [lifetime, length] = await Promise.all([search("semantic", "dangling"), search("semantic", "length")]);
+  assert.equal(queryModelLoads, 1);
+  assert.deepEqual(lifetime.map(hit => hit.cve), ["semantic", "both", "distant"]);
+  assert.equal(lifetime[1].line, 3);
+  assert.equal(length[0].cve, "distant");
   assert.deepEqual(encodings.filter(call => call.localOnly).flatMap(call => call.texts).sort(), [
     "Represent this sentence for searching relevant passages: dangling",
-    "Represent this sentence for searching relevant passages: dangling rare_operation initialize",
+    "Represent this sentence for searching relevant passages: length",
   ]);
-  assert.deepEqual(semanticHits.map(hit => hit.cve), ["semantic", "both", "distant"]);
-  assert.deepEqual(await search(' + "'), []);
 });
 
 test("Pi receives historical cases only through its own search", async (t) => {
@@ -97,6 +103,9 @@ test("Pi receives historical cases only through its own search", async (t) => {
     assert.equal(req.url, "https://mock.invalid/v1/chat/completions");
     const { tools, messages } = await req.json();
     assert.deepEqual(tools.map((tool) => tool.function.name), ["search_cases"]);
+    const schema = tools[0].function.parameters;
+    assert.ok(schema.required.includes("mode"));
+    assert.deepEqual(schema.properties.mode.enum, ["keyword", "semantic"]);
     assert.ok(!JSON.stringify(messages).includes("private-repair"));
     const followup = messages.findLast((message) => message.role === "tool");
     let delta;
@@ -104,10 +113,15 @@ test("Pi receives historical cases only through its own search", async (t) => {
       const prompt = messages.find((message) => message.role === "user").content[0].text;
       assert.equal(prompt, `1 | ${source}`);
       assert.ok(!JSON.stringify(messages).includes("example-case"));
+      delta = { tool_calls: [{ index: 0, id: "invalid", type: "function",
+        function: { name: "search_cases", arguments: JSON.stringify({ mode: "keyword", query: "length", error: "unexpected" }) } }] };
+    } else if (followup.tool_call_id === "invalid") {
+      assert.match(followup.content, /Validation failed/);
       delta = { tool_calls: [{ index: 0, id: "search1", type: "function",
-        function: { name: "search_cases", arguments: JSON.stringify({ query: "length" }) } }] };
+        function: { name: "search_cases", arguments: JSON.stringify({ mode: "keyword", query: "length" }) } }] };
     } else {
       search = JSON.parse(followup.content);
+      assert.equal(search.mode, "keyword");
       assert.equal(search.query, "length");
       assert.deepEqual(search.hits, [{ line: 1, cve: "example-case", cwe: "CWE-20",
         description: "Validate the item length.", commitMessage: "Check the supplied size.",
@@ -115,7 +129,7 @@ test("Pi receives historical cases only through its own search", async (t) => {
       delta = { content: JSON.stringify({ prediction: 0, reason: "Returns the helper result.",
         evidence: [{ startLine: 1, endLine: 1 }] }) };
     }
-    const chunk = { choices: [{ index: 0, delta, finish_reason: followup ? "stop" : "tool_calls" }] };
+    const chunk = { choices: [{ index: 0, delta, finish_reason: delta.tool_calls ? "tool_calls" : "stop" }] };
     return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, {
       headers: { "content-type": "text/event-stream" },
     });
@@ -132,6 +146,6 @@ test("Pi receives historical cases only through its own search", async (t) => {
   const failed = readReport(output.id + 1);
   assert.equal(failed.status, "failed");
   assert.deepEqual(failed.context.caseSearches, [
-    { query: "length", error: "file is not a database" },
+    { mode: "keyword", query: "length", error: "file is not a database" },
   ]);
 });

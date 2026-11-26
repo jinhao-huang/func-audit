@@ -12,6 +12,6 @@ export async function reviewSample(sample) {
   const run = db.prepare("INSERT INTO runs DEFAULT VALUES").run().lastInsertRowid;
   const id = Number(db.prepare(`INSERT INTO reports(runId, idx, source, model, startedAt, status)
     VALUES (?, ?, ?, ?, ?, 'running')`).run(run, sample.idx, sample.func, configuredModelId(), new Date().toISOString()).lastInsertRowid);
-  await runAudit(id, sample, query => searchCases(caseIndexPath, query));
+  await runAudit(id, sample, request => searchCases(caseIndexPath, request));
   return readReport(id);
 }
