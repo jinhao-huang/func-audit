@@ -1,10 +1,12 @@
 import { parseArgs } from "node:util";
-import { listRuns, predictions, readReport, recoverWorkers, score, startRun } from "./reports.ts";
-import { loadPair, prepareData } from "./samples.ts";
+import { getSavedRun, predictions, readReport, score } from "./reports.ts";
+import { loadPairs, prepareData } from "./samples.ts";
+import { refreshQueue, submitRun } from "./queue.ts";
+import { initializeReports } from "./database.ts";
 
 const usage = {
   prepare: "mise run prepare",
-  audit: "mise run audit PAIR_NUMBER",
+  audit: "mise run audit PAIR_SELECTION (e.g. 1, 1-10,15 or all)",
   report: "mise run report RUN_ID",
   export: "mise run export RUN_ID",
   score: "mise run score RUN_ID",
@@ -21,28 +23,20 @@ async function main() {
     if (positionals.length) throw new Error(`Usage: ${usage.prepare}`);
     return console.log(await prepareData());
   }
+  if (command === "audit") {
+    if (positionals.length !== 1) throw new Error(`Usage: ${usage.audit}`);
+    const { id, reports, pairs } = submitRun(await loadPairs(positionals[0]));
+    return console.log(JSON.stringify({ id, pairs, reports }));
+  }
   const id = Number(positionals[0]);
   if (positionals.length !== 1 || !/^\d+$/.test(positionals[0]) || !Number.isSafeInteger(id) || id < 1) {
     throw new Error(`Usage: ${usage[command]}`);
   }
-  if (command === "audit") {
-    const samples = await loadPair(id);
-    const { runAudit } = await import("./audit.ts");
-    const { configuredModelId } = await import("./project-api.ts");
-    const run = startRun(id, samples, configuredModelId());
-    if (process.stderr.isTTY) console.error(`Started run ${run.id}`);
-    const results = await Promise.allSettled(run.jobs.map(job => runAudit(job.id, job.sample)));
-    const failures = results.filter(result => result.status === "rejected");
-    if (failures.length) throw new Error(`Run ${run.id}: ${failures.map(result => result.reason.message).join("\n")}`);
-    return console.log(JSON.stringify(listRuns(run.id)[0], null, 2));
-  }
-  let [run] = listRuns(id);
+  initializeReports();
+  refreshQueue();
+  const run = getSavedRun(id);
   if (!run) throw new Error(`Run ${id} was not found.`);
-  if (run.reports.some(report => report.status === "started")) {
-    recoverWorkers();
-    [run] = listRuns(id);
-  }
-  if (command === "score") return console.log(score(run));
+  if (command === "score") return console.log(JSON.stringify(score(run), null, 2));
   if (command === "export") return process.stdout.write(predictions(run));
   console.log(JSON.stringify({ ...run, reports: run.reports.map(report => readReport(report.id)) }, null, 2));
 }

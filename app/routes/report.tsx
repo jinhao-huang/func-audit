@@ -18,7 +18,7 @@ export default function ReportRoute({ loaderData: { report, entries } }: Route.C
   const [updates, setUpdates] = useState<Entry[]>([]);
   const [reconnecting, setReconnecting] = useState(false);
   const cursor = entries.at(-1)?.seq ?? 0;
-  const live = report.status === "started";
+  const live = report.status === "running" || report.status === "queued";
   useEffect(() => {
     if (!live) return;
     const source = new EventSource(`/reports/${report.id}/events?after=${cursor}`);
@@ -36,7 +36,7 @@ export default function ReportRoute({ loaderData: { report, entries } }: Route.C
   const prepare = history.findLast(({ event }) => event.kind === "prepare")?.event;
   const snapshot = review?.kind === "review" ? review.snapshot : undefined;
   const stage = review ? "Reviewing the function" : prepare?.kind === "prepare" && prepare.snapshot
-    ? "Preparing the source snapshot" : "Starting the audit";
+    ? "Preparing the source snapshot" : report.status === "queued" ? "Waiting for an audit slot" : "Starting the audit";
   return <>
     <header className="mb-5 flex flex-wrap items-center justify-between gap-3">
       <div>
@@ -58,7 +58,7 @@ export default function ReportRoute({ loaderData: { report, entries } }: Route.C
         {live && <p role="status" className="flex items-center gap-3"><progress className="w-16" aria-label="Audit in progress" />
           {reconnecting ? "Reconnecting to the audit…" : stage}</p>}
         <dl className="grid gap-x-8 gap-y-3 rounded-md border bg-muted/30 p-4 sm:grid-cols-3">
-          <div><dt className="hint">Execution</dt><dd>{report.status === "completed" ? "Completed" : report.status === "failed" ? "Failed" : "Running"}</dd></div>
+          <div><dt className="hint">Execution</dt><dd>{report.status === "completed" ? "Completed" : report.status === "failed" ? "Failed" : report.status === "queued" ? "Queued" : "Running"}</dd></div>
           <div><dt className="hint">Model prediction</dt><dd>{report.prediction == null ? "No prediction" : report.prediction === 1 ? "Potential vulnerability" : "No finding"}</dd></div>
           <div><dt className="hint">Reference label</dt><dd>{report.target == null ? "Unlabeled" : report.target === 1 ? "Vulnerable" : "Benign"}</dd></div>
         </dl>

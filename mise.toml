@@ -25,7 +25,7 @@ raw_args = true
 run = "node src/cli.ts prepare"
 
 [tasks.audit]
-description = "Audit both samples in a course pair"
+description = "Submit course pairs for background evaluation"
 raw_args = true
 run = "node src/cli.ts audit"
 
@@ -35,11 +35,11 @@ raw_args = true
 run = "node src/cli.ts report"
 
 [tasks.score]
-description = "Grade a completed pair run"
+description = "Show current pair grades and totals"
 raw_args = true
 run = "node src/cli.ts score"
 
 [tasks.export]
-description = "Export predictions from a completed pair run"
+description = "Export predictions from a completed course run"
 raw_args = true
 run = "node src/cli.ts export"

@@ -1,5 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { recoverWorkers, reportUpdates } from "../../src/reports.ts";
+import { reportUpdates } from "../../src/reports.ts";
 import { openWorkspace, routeId } from "../workspace.server";
 import type { Route } from "./+types/events";
 
@@ -19,7 +19,7 @@ export function loader({ params, request }: Route.LoaderArgs) {
       try {
         if (!page) {
           await delay(500, undefined, { signal });
-          recoverWorkers(id);
+          openWorkspace();
           page = reportUpdates(id, after);
         }
         if (!page) throw new Error("The report no longer exists.");
@@ -27,7 +27,7 @@ export function loader({ params, request }: Route.LoaderArgs) {
           controller.enqueue(encoder.encode(`id: ${entry.seq}\ndata: ${JSON.stringify(entry)}\n\n`));
           after = entry.seq;
         }
-        if (page.status !== "started") {
+        if (page.status === "completed" || page.status === "failed") {
           controller.enqueue(encoder.encode(`event: finished\ndata: ${page.status}\n\n`));
           controller.close();
         } else {

@@ -1,17 +1,19 @@
-import { resolve } from "node:path";
-import { Worker } from "node:worker_threads";
-import { configuredModelId } from "../src/project-api.ts";
-import { failReport, initializeReports, recoverWorkers, listRuns, reportDetail, startRun } from "../src/reports.ts";
-import type { Sample } from "../src/samples.ts";
+import { initializeReports } from "../src/database.ts";
+import { refreshQueue } from "../src/queue.ts";
+import { getSavedRun, reportDetail } from "../src/reports.ts";
 
 let initialized = false;
 
 export function openWorkspace() {
   if (!initialized) {
-    initializeReports();
+    try {
+      initializeReports();
+    } catch (error) {
+      throw new Response((error as Error).message, { status: 503 });
+    }
     initialized = true;
   }
-  recoverWorkers();
+  return refreshQueue();
 }
 
 export function routeId(value: string) {
@@ -29,23 +31,7 @@ export function getReport(value: string) {
 
 export function getRun(value: string) {
   openWorkspace();
-  const [run] = listRuns(routeId(value));
+  const run = getSavedRun(routeId(value));
   if (!run) throw new Response("Run not found.", { status: 404 });
-  return run;
-}
-
-export function submitRun(pair: number | null, samples: Sample[]) {
-  const run = startRun(pair, samples, configuredModelId());
-  for (const { id, sample } of run.jobs) {
-    try {
-      const worker = new Worker(resolve("src/audit-worker.ts"), {
-        workerData: { id, sample }, execArgv: [],
-      });
-      worker.on("error", error => failReport(id, String(error)));
-      worker.on("exit", () => failReport(id, "The audit worker stopped before saving a result."));
-    } catch (error) {
-      failReport(id, String(error));
-    }
-  }
   return run;
 }

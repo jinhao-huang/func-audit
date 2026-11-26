@@ -7,6 +7,7 @@ export default [
     route("reports/:id", "routes/report.tsx"),
   ]),
   route("runs", "routes/submit.ts"),
+  route("course-pairs", "routes/course-pairs.ts"),
   route("reports/:id/events", "routes/events.ts"),
   route("runs/:id/result.jsonl", "routes/result.ts"),
 ] satisfies RouteConfig;

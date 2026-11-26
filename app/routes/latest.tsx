@@ -5,7 +5,7 @@ import { openWorkspace } from "../workspace.server";
 export function loader() {
   openWorkspace();
   const [latest] = listRuns();
-  if (latest) throw redirect(latest.pair === null ? `/reports/${latest.reports[0].id}` : `/runs/${latest.id}`);
+  if (latest) throw redirect(!latest.pairs ? `/reports/${latest.firstReport}` : `/runs/${latest.id}`);
   return null;
 }
 

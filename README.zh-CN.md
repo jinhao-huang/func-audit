@@ -25,7 +25,7 @@ FUNC_AUDIT_BASE_URL = "https://gateway.example/v1"
 FUNC_AUDIT_MODEL = "team/custom-deployment"
 ```
 
-## 评测一对课程样本
+## 提交课程评测
 
 把课程测试集放在 `data/raw/test.jsonl`。如需检索历史案例，把知识库放在 `data/raw/knowledge.jsonl`。课程原版脚本 `evaluation.py` 可以放在同一目录供查阅。`data/prepared/` 存放评测用的输入，`data/results/` 存放审计结果。Git 忽略整个 `data/` 目录。
 
@@ -38,9 +38,11 @@ mise run audit 1
 
 `prepare` 校验相邻的两条样本，将两侧的函数和审计所需字段写入 `data/prepared/pairs.jsonl` 的同一行。如果提供了知识库，命令还会排除 `commit_url` 出现在测试集中的案例，将其余记录写入 `data/prepared/knowledge.eval.jsonl`。
 
-`audit 1` 选中第 1 对，分别启动两次独立审计。每个会话只接收自己的函数、按需读取的源码和检索到的案例。配对关系和参考标签由宿主管理。
+`audit` 接受单个对号、用逗号分隔的范围（如 `1-10,15`），或表示全部样本对的 `all`。提交成功后，命令输出运行号、样本对数和报告数，例如 `{"id":3,"pairs":11,"reports":22}`，随后退出。评测在后台继续。同一批中重复出现的样本 ID 共用一份报告；再次提交会创建新的运行。每个模型会话只接收自己的函数和按需查询的上下文。
 
-命令输出本次运行的 `id` 和两份报告的摘要。重跑同一对会得到新的运行号。如果一侧失败，命令会以非零状态退出，错误信息里有运行号，两份报告仍可查看。假设这次的运行号是 `3`，可以这样查看、评分和导出：
+CLI 和工作台共用一个后台执行器，默认同时处理两份报告。要调整上限，在 `mise.local.toml` 的 `[env]` 下设置 `FUNC_AUDIT_CONCURRENCY = "4"`。请等队列清空后再修改执行器配置，并重启已打开的开发服务。执行器意外退出后，下次打开工作台或用 CLI 查看运行时，已中断的报告会标记为失败，仍在排队的报告会继续执行。
+
+用运行号查看进度、读取当前评分，或在整批成功后导出预测。
 
 ```sh
 mise run report 3
@@ -48,11 +50,11 @@ mise run score 3
 mise run export 3 > data/results/predictions.jsonl
 ```
 
-两份报告都完成后，项目按课程规则，用本次保存的标签和预测计算成绩。**P-C** 表示两侧均判对，**P-R** 表示两侧均判错，**P-V** 表示都判为有漏洞，**P-B** 表示都判为无漏洞。导出文件每行包含一条样本的 `idx` 和 `prediction`。工作台和命令行共用本地数据库 `data/results/runs.sqlite`。
+每对样本的两份预测齐全后就能评分。**P-C** 表示两侧均判对，**P-R** 表示两侧均判错，**P-V** 表示都判为有漏洞，**P-B** 表示都判为无漏洞。`score` 输出逐对成绩和分类计数，单列等待结果和执行失败的样本对。全部报告成功后可以导出，每个样本 ID 对应一行预测。工作台和命令行共用本地数据库 `data/results/runs.sqlite`。
 
 ## 打开工作台
 
-运行 `mise run dev`，打开终端显示的本地地址。选择 **New audit → Course pair**，输入课程对号，点击 **Start audit**。点击左侧的一次运行可查看完成进度和课程成绩，展开后可以选择其中任一报告。**Verdict** 显示判断和理由，**Evidence** 显示引用的源码，**Tools** 可以展开查看调用参数和返回值。服务运行期间可关闭页面，稍后再打开。
+运行 `mise run dev`，打开终端显示的本地地址。选择 **New audit → Course pairs**，输入范围，核对样本对数和报告数后点击 **Start audit**。点击左侧的运行可查看整批进度和逐对成绩，展开样本对可打开报告。**Verdict** 显示判断和理由，**Evidence** 显示引用的源码，**Tools** 可以展开查看调用参数和返回值。关闭页面后评测仍会继续。
 
 临时检查一个函数时，选择 **Single function**，粘贴一条 JSON，例如 `{"idx":1,"func":"int one() { return 1; }"}`。可选的 `target` 取值为 0 或 1，用于核对这份报告的判断。如需运行生产构建，在仓库根目录依次执行 `mise exec -- pnpm build` 和 `mise exec -- pnpm start`。
 

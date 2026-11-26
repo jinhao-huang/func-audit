@@ -3,6 +3,8 @@ import { mkdir, mkdtemp, open, readFile, rename, rm, writeFile } from "node:fs/p
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
+import { selectPairs } from "./selection.ts";
+
 const datasetPath = "data/raw/test.jsonl";
 const rawKnowledge = "data/raw/knowledge.jsonl";
 const prepared = "data/prepared";
@@ -102,16 +104,19 @@ export async function prepareData() {
   return `Prepared ${pairs.length} pairs in ${pairsPath}. ${knowledgeSummary}`;
 }
 
-export async function loadPair(pair: number) {
+export type CoursePair = { number: number; samples: [Sample, Sample] };
+
+export async function loadPairs(selection: string) {
   const text = await readFile(pairsPath, "utf8").catch(error => {
     if (error.code === "ENOENT") throw new Error("Prepared pairs missing. Run mise run prepare first.");
     throw error;
   });
-  const line = text.split("\n")[pair - 1];
-  if (!line) throw new Error(`Pair ${pair} was not found in pairs.jsonl.`);
-  try {
-    return parsePair(JSON.parse(line), pair);
-  } catch (cause) {
-    throw new Error(`Invalid prepared pair ${pair}. Run mise run prepare.`, { cause });
-  }
+  const lines = text.trimEnd().split("\n");
+  return selectPairs(selection, text.trim() ? lines.length : 0).map(number => {
+    try {
+      return { number, samples: parsePair(JSON.parse(lines[number - 1]), number) };
+    } catch (cause) {
+      throw new Error(`Invalid prepared pair ${number}. Run mise run prepare.`, { cause });
+    }
+  });
 }
