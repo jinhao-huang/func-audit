@@ -49,7 +49,6 @@ function refreshIndex(db: DatabaseSync, file: string, stamp: string) {
 export function searchCases(file: string, query: string): CaseSearch {
   const info = statSync(file, { bigint: true });
   using db = new DatabaseSync(`${file}.sqlite`, { timeout: 30000 });
-  db.exec("PRAGMA journal_mode=WAL");
   refreshIndex(db, file, `${info.size}:${info.mtimeNs}`);
   const ranked = db.prepare(`
     SELECT rowid, cve, cwe, substr(description, 1, 900) AS description,

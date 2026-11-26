@@ -40,6 +40,8 @@ test("CLI and workspace share one bounded queue, pair grades and interrupted-run
   let gate = Promise.withResolvers();
   const thirdReport = Promise.withResolvers();
   let atCapacity = Promise.withResolvers();
+  const firstLookups = Promise.withResolvers();
+  let lookupCount = 0;
   let active = 0;
   let peak = 0;
   let failThree = false;
@@ -48,13 +50,15 @@ test("CLI and workspace share one bounded queue, pair grades and interrupted-run
     for await (const chunk of req) chunks.push(chunk);
     const { messages } = JSON.parse(Buffer.concat(chunks));
     const source = messages.find(message => message.role === "user").content[0].text;
-    const one = source.includes("one()");
     const three = source.includes("three()");
-    const lookup = one && !messages.some(message => message.role === "tool");
+    const lookup = !three && !messages.some(message => message.role === "tool");
     active++;
     peak = Math.max(peak, active);
     res.once("close", () => active--);
-    if (!lookup) {
+    if (lookup) {
+      if (++lookupCount === 2) firstLookups.resolve();
+      await firstLookups.promise;
+    } else {
       if (active === 2) atCapacity.resolve();
       await gate.promise;
       if (three) await thirdReport.promise;
@@ -119,11 +123,13 @@ test("CLI and workspace share one bounded queue, pair grades and interrupted-run
   const resumed = await fetch(report + "/events?after=0", { headers: { "Last-Event-ID": cursor } });
   gate.resolve();
   const replay = await resumed.text();
-  const entries = replay.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
-  assert.ok(entries.every(entry => entry.seq > Number(cursor)));
-  assert.ok(entries.some(({ event }) => event.kind === "cases" && event.search.hits[0].cve === "CVE-2020-1234"));
-  assert.match(replay, /event: finished\ndata: completed/);
-  await terminal(2);
+  const parseEntries = text => text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+  assert.ok(parseEntries(replay).every(entry => entry.seq > Number(cursor)));
+  for (const stream of [replay, await terminal(2)]) {
+    assert.match(stream, /event: finished\ndata: completed/);
+    const lookup = parseEntries(stream).find(({ event }) => event.kind === "cases");
+    assert.deepEqual(lookup?.event.search.hits?.map(hit => hit.cve), ["CVE-2020-1234"]);
+  }
   const inProgress = await (await fetch(run)).text();
   assert.match(inProgress, /2\/3 reports finished/);
   assert.match(inProgress, /1\/2 pairs scored · 0 failed · 1 awaiting results/);
