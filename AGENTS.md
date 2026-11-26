@@ -4,7 +4,7 @@
 
 Use `src/audit-one.ts` for argument parsing, sample selection, and JSON output. Use `src/review.ts` for the Pi session, review prompt, and evidence validation. Keep model selection and credential loading in `src/project-api.ts`.
 
-Pass only the selected row's `func` to `reviewFunction`. The CLI attaches `idx` to the finished report. Keep labels and commit URLs outside the model session. Keep course datasets, credentials, and generated reports out of Git.
+Keep sample selection and revision selection in the host. Give Pi the selected function, its relative location, and read-only tools scoped to that snapshot. Keep labels, commit URLs, revision IDs, and other versions outside the session. The CLI attaches `idx` to the finished report. Keep course datasets, credentials, and generated reports out of Git.
 
 Preserve isolation from personal Pi settings and provider credentials when changing the API integration. Use the [README](README.md) for local setup. Update both language versions when a change affects configuration, CLI usage, or the report format.
 

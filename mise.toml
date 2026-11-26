@@ -1,6 +1,7 @@
 [tools]
 node = "24.18.1"
 pnpm = "11.20.0"
+ripgrep = "15.1.0"
 
 [tasks.setup]
 description = "Create local API settings and install locked dependencies"
