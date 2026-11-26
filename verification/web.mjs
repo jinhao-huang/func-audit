@@ -99,7 +99,7 @@ test("CLI and workspace share one bounded queue, pair grades and interrupted-run
   assert.equal(response.headers.get("location"), "/runs/1");
   const run = base + "/runs/1";
   const report = base + "/reports/1";
-  const db = new DatabaseSync(join(cwd, "data/results/runs.sqlite"));
+  const db = new DatabaseSync(join(cwd, "data/results/runs.sqlite"), { readOnly: true, timeout: 5000 });
   t.after(() => db.close());
   const terminal = async id => (await fetch(base + `/reports/${id}/events`)).text();
   await atCapacity.promise;
