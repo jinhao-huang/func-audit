@@ -88,7 +88,7 @@ test("each CLI attempt can be reopened after the audit process exits", async (t)
   const saved = await reopen(successId);
   assert.ok(Number.isFinite(Date.parse(saved.startedAt)));
   assert.deepEqual(saved, {
-    ...expected, source, startedAt: saved.startedAt, status: "completed", error: null,
+    ...expected, source, target: null, startedAt: saved.startedAt, status: "completed", error: null,
   });
   const failed = await reopen(failedId);
   assert.equal(failed.status, "failed");

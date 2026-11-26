@@ -46,7 +46,7 @@ function parseReview(reply: string, lines: string[], lookups: Lookup[]) {
   if (!Array.isArray(value.evidence) || value.evidence.length === 0) {
     throw new Error("Expected at least one source citation.");
   }
-  const evidence = value.evidence.map((range: { path?: string; startLine: number; endLine: number }) => {
+  const evidence: { path?: string; startLine: number; endLine: number; source: string }[] = value.evidence.map((range: { path?: string; startLine: number; endLine: number }) => {
     const { path, startLine, endLine } = range;
     let citedLines = lines;
     let first = 1;
@@ -71,35 +71,39 @@ function parseReview(reply: string, lines: string[], lookups: Lookup[]) {
 export async function reviewFunction(source: string, snapshot?: {
   root: string;
   location: Pick<SnapshotMetadata, "path" | "startLine" | "endLine">;
-  onLookups: (lookups: Lookup[]) => void;
-}, searchCases?: (query: string) => CaseSearch) {
+  onLookup: (lookup: Lookup, callId: string) => void;
+}, searchCases?: (query: string, callId: string) => CaseSearch,
+  onStart?: (callId: string, name: string, args: object) => void) {
   const { modelRuntime, model } = await projectApi();
   const lines = source.split(/\r?\n/);
   const numbered = lines.map((line, i) => `${i + 1} | ${line}`).join("\n");
-  let lookups: Lookup[] = [];
+  const lookups: Lookup[] = [];
   let traceFailure: Error | undefined;
   function abortReview(message: string, cause: unknown): never {
     traceFailure = new Error(`${message}: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
     session.agent.abort();
     throw traceFailure;
   }
+  function startTool(id: string, name: string, args: object) {
+    try { onStart?.(id, name, args); } catch (cause) { abortReview("Could not save tool call", cause); }
+  }
   const tools = [
-    ...(snapshot ? sourceTools(snapshot.root, (lookup) => {
-      const next = [...lookups, lookup];
+    ...(snapshot ? sourceTools(snapshot.root, (lookup, callId) => {
       try {
-        snapshot.onLookups(next);
+        snapshot.onLookup(lookup, callId);
       } catch (cause) {
         abortReview("Could not save snapshot lookup", cause);
       }
-      lookups = next;
-    }) : []),
+      lookups.push(lookup);
+    }, startTool) : []),
     ...(searchCases ? [defineTool({
       name: "search_cases", label: "Search historical cases",
       description: "Look up historical maintenance cases by identifiers, APIs, or short English descriptions.",
       parameters: Type.Object({ query: Type.String({ minLength: 1, maxLength: 500 }) }),
-      execute: async (_id, { query }) => {
+      execute: async (id, { query }) => {
         try {
-          const result = searchCases(query);
+          startTool(id, "search_cases", { query });
+          const result = searchCases(query, id);
           return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: undefined };
         } catch (cause) {
           abortReview("Historical case lookup failed", cause);

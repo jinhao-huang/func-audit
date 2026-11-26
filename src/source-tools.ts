@@ -50,17 +50,19 @@ async function search(root: string, args: Search, signal?: AbortSignal) {
   return matches.join("\n") || "No matches found.";
 }
 
-export function sourceTools(root: string, record: (lookup: Lookup) => void) {
-  async function run(lookup: Lookup, action: () => Promise<string>) {
+export function sourceTools(root: string, record: (lookup: Lookup, callId: string) => void,
+  onStart?: (callId: string, name: string, args: object) => void) {
+  async function run(callId: string, lookup: Lookup, action: () => Promise<string>) {
+    onStart?.(callId, lookup.tool, lookup.args);
     try {
       lookup.result = await action();
     } catch (error) {
       lookup.result = error instanceof Error ? error.message.replaceAll(root, ".") : "Lookup failed.";
       lookup.error = true;
-      record(lookup);
+      record(lookup, callId);
       throw new Error(lookup.result);
     }
-    record(lookup);
+    record(lookup, callId);
     return { content: [{ type: "text" as const, text: lookup.result }], details: undefined };
   }
   return [
@@ -68,13 +70,13 @@ export function sourceTools(root: string, record: (lookup: Lookup) => void) {
       name: "grep", label: "Search snapshot",
       description: "Search for a regular expression. Omit path to search the whole snapshot, or specify a relative directory or file. Returns paths, line numbers and matching text.",
       parameters: Type.Object({ pattern: Type.String({ minLength: 1 }), path: Type.Optional(Type.String()) }),
-      execute: async (_id, args, signal) => run({ tool: "grep", args, result: "" }, () => search(root, args, signal)),
+      execute: async (id, args, signal) => run(id, { tool: "grep", args, result: "" }, () => search(root, args, signal)),
     }),
     defineTool({
       name: "read", label: "Read snapshot lines",
       description: "Read the exact text of an inclusive, one-based line range in a snapshot-relative file.",
       parameters: Type.Object({ path: Type.String(), startLine: Type.Integer({ minimum: 1 }), endLine: Type.Integer({ minimum: 1 }) }),
-      execute: async (_id, args) => run({ tool: "read", args, result: "" }, async () => {
+      execute: async (id, args) => run(id, { tool: "read", args, result: "" }, async () => {
         const { startLine, endLine } = args;
         const path = resolve(root, await snapshotPath(root, args.path));
         if (!(await stat(path)).isFile()) throw new Error("Choose a file to read.");

@@ -151,8 +151,8 @@ test("Pi uses the selected snapshot and saved evidence survives its removal", as
 
   const db = new DatabaseSync(".func-audit.sqlite");
   try {
-    db.exec(`CREATE TRIGGER reject_read BEFORE INSERT ON report_context
-      WHEN json_extract(NEW.context, '$.lookups[#-1].tool') = 'read'
+    db.exec(`CREATE TRIGGER reject_read BEFORE INSERT ON report_events
+      WHEN json_extract(NEW.event, '$.lookup.tool') = 'read'
       BEGIN SELECT RAISE(ABORT, 'simulated trace failure'); END`);
   } finally {
     db.close();
