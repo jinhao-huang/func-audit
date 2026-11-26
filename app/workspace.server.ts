@@ -1,6 +1,7 @@
 import { initializeReports } from "../src/database.ts";
 import { refreshQueue } from "../src/queue.ts";
 import { getSavedRun, reportDetail } from "../src/reports.ts";
+import { coversCitation } from "../src/evidence.ts";
 
 let initialized = false;
 
@@ -26,7 +27,12 @@ export function getReport(value: string) {
   openWorkspace();
   const detail = reportDetail(routeId(value));
   if (!detail) throw new Response("Report not found.", { status: 404 });
-  return detail;
+  const { report, entries } = detail;
+  const evidence = report.evidence?.map(item => {
+    const match = entries.find(({ event }) => event.kind === "lookup" && coversCitation(event.lookup, item))?.event;
+    return { ...item, callId: match?.kind === "lookup" ? match.callId : undefined };
+  });
+  return { report: { ...report, evidence }, entries };
 }
 
 export function getRun(value: string) {

@@ -107,6 +107,9 @@ test("CLI and workspace share one bounded queue, pair grades and interrupted-run
   t.after(() => db.close());
   const terminal = async id => (await fetch(base + `/reports/${id}/events`)).text();
   await atCapacity.promise;
+  const runningPage = (await (await fetch(report)).text()).replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "");
+  assert.match(runningPage, /Audit timeline/);
+  assert.match(runningPage, /Audit queued[\s\S]*Preparing the submitted function[\s\S]*Review started[\s\S]*search_cases[\s\S]*Returned/);
   cliEnv.FUNC_AUDIT_CONCURRENCY = "4";
   assert.deepEqual(JSON.parse(cli("audit", "all")), { id: 2, pairs: 2, reports: 3 });
   cliEnv.FUNC_AUDIT_CONCURRENCY = "2";
@@ -141,6 +144,7 @@ test("CLI and workspace share one bounded queue, pair grades and interrupted-run
   assert.match(html, /Returns a constant\./);
   assert.match(html, /False negative/);
   assert.match(html, /aria-label="Report sections"/);
+  assert.match(html, /aria-label="View source: Submitted function · L1–1"/);
   assert.match(await (await fetch(run)).text(), /2\/2 pairs scored/);
   assert.deepEqual(JSON.parse(cli("score", "2")).pairs, [{ number: 1, grade: "P-B" }, { number: 2, grade: "P-R" }]);
   const exported = await (await fetch(run + "/result.jsonl")).text();
