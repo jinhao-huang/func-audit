@@ -1,6 +1,6 @@
 import { parseArgs } from "node:util";
 import { listRuns, predictions, readReport, recoverWorkers, score, startRun } from "./reports.ts";
-import { loadPair, preparePairs } from "./samples.ts";
+import { loadPair, prepareData } from "./samples.ts";
 
 const usage = {
   prepare: "mise run prepare",
@@ -19,7 +19,7 @@ async function main() {
   if (values.help) return console.log(`Usage: ${usage[command]}`);
   if (command === "prepare") {
     if (positionals.length) throw new Error(`Usage: ${usage.prepare}`);
-    return console.log(await preparePairs());
+    return console.log(await prepareData());
   }
   const id = Number(positionals[0]);
   if (positionals.length !== 1 || !/^\d+$/.test(positionals[0]) || !Number.isSafeInteger(id) || id < 1) {

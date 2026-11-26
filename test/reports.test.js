@@ -21,6 +21,31 @@ test("course grades follow the labels in either report order", () => {
   }
 });
 
+test("prepare excludes test commits regardless of knowledge file order", async t => {
+  const cwd = await mkdtemp(join(tmpdir(), "func-audit-prepare-"));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  await mkdir(join(cwd, "data/raw"), { recursive: true });
+  const samples = [0, 1].map(target => ({ idx: target, func: "int f();", target, commit_url: "repair" }));
+  const jsonl = rows => rows.map(row => JSON.stringify(row)).join("\n") + "\n";
+  await writeFile(join(cwd, "data/raw/test.jsonl"), jsonl(samples));
+  const raw = join(cwd, "data/raw/knowledge.jsonl");
+  const prepared = join(cwd, "data/prepared/knowledge.eval.jsonl");
+  const keep = { commit_url: "other", cve: "shared" };
+  const overlap = { commit_url: "repair", cve: "shared" };
+  const prepare = () => exec(process.execPath, [cli, "prepare"], { cwd });
+  for (const rows of [[keep, overlap, overlap], [overlap, overlap, keep]]) {
+    await writeFile(raw, jsonl(rows));
+    assert.match((await prepare()).stdout, /1 kept, 2 excluded for overlap/);
+    assert.equal(await readFile(prepared, "utf8"), jsonl([keep]));
+  }
+  await writeFile(raw, jsonl([overlap]) + "{");
+  await assert.rejects(prepare(), /knowledge.jsonl line 2: invalid JSON/);
+  assert.equal(await readFile(prepared, "utf8"), jsonl([keep]));
+  await rm(raw);
+  assert.match((await prepare()).stdout, /case retrieval disabled/);
+  await assert.rejects(readFile(prepared), { code: "ENOENT" });
+});
+
 test("prepare, audit, reopen and grade independent attempts at the same pair", async t => {
   const cwd = await mkdtemp(join(tmpdir(), "func-audit-pairs-"));
   t.after(() => rm(cwd, { recursive: true, force: true }));
@@ -33,9 +58,13 @@ test("prepare, audit, reopen and grade independent attempts at the same pair", a
   const prepare = () => exec(process.execPath, [cli, "prepare"], { cwd });
   await writeFile(dataset, JSON.stringify(samples[0]));
   await assert.rejects(prepare(), { code: 1 });
+  const invalidPairs = [...samples, { ...samples[0], idx: 40 }, { ...samples[0], idx: 50 }];
+  await writeFile(dataset, invalidPairs.map(sample => JSON.stringify(sample)).join("\n"));
+  await assert.rejects(prepare(), /Pair 2 needs one sample of each target/);
   await writeFile(dataset, samples.map(sample => JSON.stringify(sample)).join("\n"));
-  await prepare();
-  assert.deepEqual(JSON.parse(await readFile(join(cwd, "data/prepared/pairs.jsonl"), "utf8")), [30, 10]);
+  assert.match((await prepare()).stdout, /case retrieval disabled/);
+  assert.deepEqual(JSON.parse(await readFile(join(cwd, "data/prepared/pairs.jsonl"), "utf8")), samples);
+  await rm(dataset);
 
   let failSecond = false;
   const prompts = [];
@@ -78,6 +107,5 @@ test("prepare, audit, reopen and grade independent attempts at the same pair", a
     db.close();
   }
   await assert.rejects(run("audit", "1"), /Run 3:.*could not save failure: .*simulated write failure/);
-  await rm(dataset);
   assert.equal((await run("score", String(first.id))).stdout.trim(), "P-C");
 });

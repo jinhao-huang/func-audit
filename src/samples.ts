@@ -1,9 +1,13 @@
-import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, open, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 const datasetPath = "data/raw/test.jsonl";
-const manifestPath = "data/prepared/pairs.jsonl";
+const rawKnowledge = "data/raw/knowledge.jsonl";
+const prepared = "data/prepared";
+const pairsPath = join(prepared, "pairs.jsonl");
+export const knowledgePath = join(prepared, "knowledge.eval.jsonl");
 
 export type Sample = { idx: number; func: string; commit_url?: string; target?: number };
 
@@ -17,73 +21,97 @@ export function parseSample(value: unknown): Sample {
   return { idx: sample.idx!, func: sample.func, commit_url: sample.commit_url, target: sample.target };
 }
 
-async function* datasetRows() {
-  const text = await readFile(datasetPath, "utf8");
-  for (const [index, line] of text.split("\n").entries()) {
+function parsePair(value: unknown, pair: number): [Sample, Sample] {
+  if (!Array.isArray(value) || value.length !== 2) throw new Error("Expected two samples.");
+  const [first, second] = value.map(parseSample);
+  if (first.target === undefined || second.target === undefined || first.target === second.target) {
+    throw new Error(`Pair ${pair} needs one sample of each target.`);
+  }
+  if (first.idx === second.idx) throw new Error(`Pair ${pair} needs two distinct sample IDs.`);
+  return [first, second];
+}
+
+async function* rows(path: string) {
+  await using file = await open(path);
+  let number = 0;
+  for await (const line of file.readLines()) {
+    number++;
     if (!line.trim()) continue;
+    let value;
     try {
-      yield JSON.parse(line.trim());
+      value = JSON.parse(line);
     } catch (cause) {
-      throw new Error(`${datasetPath} line ${index + 1}: invalid JSON.`, { cause });
+      throw new Error(`${path} line ${number}: invalid JSON.`, { cause });
     }
+    yield { value, line };
   }
 }
 
-export async function preparePairs() {
-  const pairs: number[][] = [];
+export async function prepareData() {
+  const pairs: string[] = [];
   const seen = new Map<number, unknown>();
-  let first: Sample | undefined;
-  for await (const row of datasetRows()) {
-    const sample = parseSample(row);
-    if (sample.target === undefined) throw new Error(`Sample ${sample.idx} is missing its target.`);
-    if (seen.has(sample.idx) && !isDeepStrictEqual(seen.get(sample.idx), row)) {
-      throw new Error(`Conflicting records for sample ${sample.idx}.`);
+  const testCommits = new Set<string>();
+  const pending: unknown[] = [];
+  for await (const { value } of rows(datasetPath)) {
+    pending.push(value);
+    if (pending.length < 2) continue;
+    const pair = parsePair(pending, pairs.length + 1);
+    for (const [index, sample] of pair.entries()) {
+      if (seen.has(sample.idx) && !isDeepStrictEqual(seen.get(sample.idx), pending[index])) {
+        throw new Error(`Conflicting records for sample ${sample.idx}.`);
+      }
+      seen.set(sample.idx, pending[index]);
+      if (sample.commit_url) testCommits.add(sample.commit_url);
     }
-    seen.set(sample.idx, row);
-    if (!first) {
-      first = sample;
-    } else {
-      if (sample.target === first.target) throw new Error(`Pair ${pairs.length + 1} needs one sample of each target.`);
-      pairs.push([first.idx, sample.idx]);
-      first = undefined;
-    }
+    pairs.push(JSON.stringify(pair));
+    pending.length = 0;
   }
-  if (first) throw new Error(`Sample ${first.idx} has no partner.`);
+  if (pending.length) throw new Error(`The last record in ${datasetPath} has no partner.`);
   if (!pairs.length) throw new Error(`${datasetPath} is empty.`);
 
-  const dir = dirname(manifestPath);
-  await mkdir(dir, { recursive: true });
-  const temporary = await mkdtemp(join(dir, ".prepare-"));
+  await mkdir(prepared, { recursive: true });
+  const temporary = await mkdtemp(join(prepared, ".prepare-"));
+  let knowledgeSummary = `No ${rawKnowledge}; case retrieval disabled.`;
   try {
-    const path = join(temporary, "pairs.jsonl");
-    await writeFile(path, pairs.map(pair => JSON.stringify(pair)).join("\n") + "\n");
-    await rename(path, manifestPath);
+    const pairFile = join(temporary, "pairs.jsonl");
+    await writeFile(pairFile, pairs.join("\n") + "\n");
+    if (existsSync(rawKnowledge)) {
+      let kept = 0;
+      let excluded = 0;
+      async function* evaluationRows() {
+        for await (const { value, line } of rows(rawKnowledge)) {
+          if (testCommits.has(value.commit_url)) {
+            excluded++;
+          } else {
+            kept++;
+            yield line + "\n";
+          }
+        }
+      }
+      const caseFile = join(temporary, "knowledge.eval.jsonl");
+      await writeFile(caseFile, evaluationRows());
+      await rename(caseFile, knowledgePath);
+      knowledgeSummary = `Historical cases: ${kept} kept, ${excluded} excluded for overlap.`;
+    } else {
+      await rm(knowledgePath, { force: true });
+    }
+    await rename(pairFile, pairsPath);
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }
-  return `Prepared ${pairs.length} pairs in ${manifestPath}.`;
+  return `Prepared ${pairs.length} pairs in ${pairsPath}. ${knowledgeSummary}`;
 }
 
-export async function loadPair(pair: number): Promise<[Sample, Sample]> {
-  const manifest = await readFile(manifestPath, "utf8").catch(error => {
-    if (error.code === "ENOENT") throw new Error("Pair manifest missing. Run mise run prepare first.");
+export async function loadPair(pair: number) {
+  const text = await readFile(pairsPath, "utf8").catch(error => {
+    if (error.code === "ENOENT") throw new Error("Prepared pairs missing. Run mise run prepare first.");
     throw error;
   });
-  const line = manifest.trimEnd().split(/\r?\n/)[pair - 1];
+  const line = text.split("\n")[pair - 1];
   if (!line) throw new Error(`Pair ${pair} was not found in pairs.jsonl.`);
-  const ids = JSON.parse(line);
-  if (!Array.isArray(ids) || ids.length !== 2 || !ids.every(Number.isSafeInteger) || ids[0] === ids[1]) {
-    throw new Error(`Invalid manifest entry for pair ${pair}. Run mise run prepare.`);
+  try {
+    return parsePair(JSON.parse(line), pair);
+  } catch (cause) {
+    throw new Error(`Invalid prepared pair ${pair}. Run mise run prepare.`, { cause });
   }
-  const records = new Map<number, Sample>();
-  for await (const record of datasetRows()) {
-    if (ids.includes(record.idx)) records.set(record.idx, parseSample(record));
-    if (records.size === 2) break;
-  }
-  const first = records.get(ids[0]);
-  const second = records.get(ids[1]);
-  if (!first || !second || first.target == null || second.target == null || first.target === second.target) {
-    throw new Error(`Pair ${pair} does not match the dataset. Run mise run prepare.`);
-  }
-  return [first, second];
 }

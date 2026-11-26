@@ -33,8 +33,9 @@ test("submit a pair, replay tool events, download both predictions and inspect a
   const samples = [{ idx: 9, func: "int one() { return 1; }", target: 1 },
     { idx: 11, func: "int two() { return 2; }", target: 0 }];
   await writeFile(join(cwd, "data/raw/test.jsonl"), samples.map(row => JSON.stringify(row)).join("\n"));
+  await writeFile(join(cwd, "data/raw/knowledge.jsonl"), JSON.stringify({ func: "int one();", cve: "CVE-2020-1234" }));
   execFileSync(process.execPath, ["src/cli.ts", "prepare"], { cwd });
-  await writeFile(join(cwd, "data/prepared/knowledge.eval.jsonl"), JSON.stringify({ func: "int one();", cve: "CVE-2020-1234" }));
+  await rm(join(cwd, "data/raw"), { recursive: true });
   execFileSync(process.execPath, ["--input-type=module", "-e",
     'import { startRun } from "./src/reports.ts"; startRun(null, [{idx:10,func:"int zero();"}], "fixture");'], { cwd });
   const finish = Promise.withResolvers();

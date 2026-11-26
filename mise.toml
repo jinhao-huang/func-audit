@@ -20,7 +20,7 @@ description = "Open the local development server"
 run = "pnpm dev"
 
 [tasks.prepare]
-description = "Prepare the course pair manifest"
+description = "Prepare course pairs and the evaluation knowledge base"
 raw_args = true
 run = "node src/cli.ts prepare"
 

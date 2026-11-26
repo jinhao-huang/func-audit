@@ -27,16 +27,18 @@ FUNC_AUDIT_MODEL = "team/custom-deployment"
 
 ## 评测一对课程样本
 
-把课程测试集放在 `data/raw/test.jsonl`。课程原版脚本 `evaluation.py` 可以放在同一目录供查阅。`data/prepared/` 存放评测用的输入，`data/results/` 存放审计结果。Git 忽略整个 `data/` 目录。
+把课程测试集放在 `data/raw/test.jsonl`。如需检索历史案例，把知识库放在 `data/raw/knowledge.jsonl`。课程原版脚本 `evaluation.py` 可以放在同一目录供查阅。`data/prepared/` 存放评测用的输入，`data/results/` 存放审计结果。Git 忽略整个 `data/` 目录。
 
-首次使用时先生成配对清单。更换数据集或调整记录顺序后，需要重新生成清单。
+首次审计前先运行 `prepare`。测试集或知识库有改动时，重新运行即可。
 
 ```sh
 mise run prepare
 mise run audit 1
 ```
 
-`prepare` 按课程规则校验相邻记录，将每对样本的两个编号写成 `data/prepared/pairs.jsonl` 中的一行。`audit 1` 选中第 1 对，分别启动两次独立审计。每个会话只接收自己的函数、按需读取的源码和检索到的案例。配对关系和参考标签由宿主管理。
+`prepare` 校验相邻的两条样本，将两侧的函数和审计所需字段写入 `data/prepared/pairs.jsonl` 的同一行。如果提供了知识库，命令还会排除 `commit_url` 出现在测试集中的案例，将其余记录写入 `data/prepared/knowledge.eval.jsonl`。
+
+`audit 1` 选中第 1 对，分别启动两次独立审计。每个会话只接收自己的函数、按需读取的源码和检索到的案例。配对关系和参考标签由宿主管理。
 
 命令输出本次运行的 `id` 和两份报告的摘要。重跑同一对会得到新的运行号。如果一侧失败，命令会以非零状态退出，错误信息里有运行号，两份报告仍可查看。假设这次的运行号是 `3`，可以这样查看、评分和导出：
 
@@ -61,12 +63,6 @@ mise run export 3 > data/results/predictions.jsonl
 Pi 用 `grep(pattern)` 搜索整个快照，传入可选的 `path` 可将范围缩小到目录或单个文件。需要看原文时，Pi 用 `read(path, startLine, endLine)` 读取指定行。引用仓库源码的证据带有相对路径 `path`，行号从文件开头算起。报告的 `context.snapshot` 记录版本和函数位置，`context.lookups` 保存工具参数、返回的原文或错误。列表为空表示本次没有执行仓库查询。模型看不到样本标签和修复提交链接。
 
 ## 使用历史案例
-
-运行 `mise run prepare` 后，在仓库根目录执行下面的命令，生成评测用的知识库。这条命令适用于含 7,578 条记录的课程原版。原库第 3643、3644 行与测试样本 187732 来自同一修复提交，生成副本时跳过这两行。
-
-```sh
-awk 'NR != 3643 && NR != 3644' data/raw/knowledge.jsonl > data/prepared/knowledge.eval.jsonl
-```
 
 首次调用 `search_cases` 时会在 `data/prepared/` 中创建 SQLite FTS5 索引 `knowledge.eval.jsonl.sqlite`，因此目录需要可写。后续审计复用索引，知识库文件大小或修改时间变化时会自动重建。目录里没有评测副本时，CLI 会跳过案例检索。
 

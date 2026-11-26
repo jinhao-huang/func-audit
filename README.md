@@ -27,16 +27,18 @@ FUNC_AUDIT_MODEL = "team/custom-deployment"
 
 ## Run a course pair
 
-Place the course dataset at `data/raw/test.jsonl`. You can keep the original course script `evaluation.py` alongside it for reference. Generated inputs go in `data/prepared/` and audit outputs in `data/results/`. Git ignores the entire `data/` directory.
+Place the course dataset at `data/raw/test.jsonl`. For historical case retrieval, add `data/raw/knowledge.jsonl`. You can keep the original course script `evaluation.py` alongside it for reference. Generated inputs go in `data/prepared/` and audit outputs in `data/results/`. Git ignores the entire `data/` directory.
 
-Prepare the pair manifest once, and regenerate it whenever you replace or reorder the dataset.
+Run `prepare` before the first audit and whenever either input changes.
 
 ```sh
 mise run prepare
 mise run audit 1
 ```
 
-`prepare` validates the course's adjacent records and writes their sample IDs to `data/prepared/pairs.jsonl`, one pair per line. `audit 1` runs the first pair in two independent sessions. Each session receives only its own function, requested source excerpts, and retrieved historical cases. The host keeps the reference labels and the other sample outside the session.
+`prepare` writes each validated pair of adjacent samples to one line of `data/prepared/pairs.jsonl`, including both functions. If the knowledge file is present, it also writes `data/prepared/knowledge.eval.jsonl`, excluding cases whose `commit_url` appears in the test set.
+
+`audit 1` runs the first pair in two independent sessions. Each session receives only its own function, requested source excerpts, and retrieved historical cases. The host keeps the reference labels and the other sample outside the session.
 
 The audit prints JSON with the new run `id` and both report summaries. Each retry creates a separate run. If either audit fails, the command exits with an error containing the run ID, and you can still open both reports. To inspect, score, or export a run, use its ID (here, `3`):
 
@@ -61,12 +63,6 @@ For course samples with a `commit_url`, the same audit command downloads a tempo
 Pi can use `grep(pattern)` across the snapshot, optionally limiting `path` to a directory or file. It can read specific lines with `read(path, startLine, endLine)`. A snapshot citation includes its relative `path` and uses file line numbers. The report's `context.snapshot` identifies the revision and function location. `context.lookups` preserves the tool arguments and returned text, including failed lookups. An empty list means no snapshot lookup ran. The model receives neither the dataset label nor the repair commit URL.
 
 ## Use historical cases
-
-After running `mise run prepare`, create the evaluation copy from the repository root. The following command applies to the 7,578-row course release. Lines 3643 and 3644 share a repair commit with test sample 187732.
-
-```sh
-awk 'NR != 3643 && NR != 3644' data/raw/knowledge.jsonl > data/prepared/knowledge.eval.jsonl
-```
 
 The first call to `search_cases` builds a SQLite FTS5 index in `knowledge.eval.jsonl.sqlite` in `data/prepared/`, which must be writable. The CLI reuses the index until the knowledge file's size or modification time changes. Without the evaluation copy, the audit skips case retrieval.
 

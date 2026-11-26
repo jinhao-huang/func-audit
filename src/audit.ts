@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { searchCases } from "./cases.ts";
 import { completeReport, failReport, recordEvent } from "./reports.ts";
 import { reviewFunction } from "./review.ts";
-import type { Sample } from "./samples.ts";
+import { knowledgePath, type Sample } from "./samples.ts";
 import { prepareSnapshot } from "./snapshot.ts";
 
 export async function runAudit(id: number, sample: Sample) {
@@ -12,8 +12,7 @@ export async function runAudit(id: number, sample: Sample) {
     for (const name of Object.keys(process.env)) {
       if (name.startsWith("OPENAI_")) delete process.env[name];
     }
-    const knowledge = "data/prepared/knowledge.eval.jsonl";
-    const cases = existsSync(knowledge);
+    const cases = existsSync(knowledgePath);
     recordEvent(id, { kind: "prepare", snapshot: sample.commit_url !== undefined, cases });
     if (sample.commit_url !== undefined) snapshot = await prepareSnapshot(sample.commit_url, sample.target!, sample.func);
     recordEvent(id, { kind: "review", snapshot: snapshot?.metadata });
@@ -23,7 +22,7 @@ export async function runAudit(id: number, sample: Sample) {
     }, cases ? (query, callId) => {
       let search;
       try {
-        search = searchCases(knowledge, query);
+        search = searchCases(knowledgePath, query);
       } catch (cause) {
         recordEvent(id, { kind: "cases", callId, search: { query, error: cause instanceof Error ? cause.message : String(cause) } });
         throw cause;
